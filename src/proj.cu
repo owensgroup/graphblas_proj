@@ -12,6 +12,7 @@
 #include "test/test.hpp"
 
 #include "cli.h"
+#include "timer.cuh"
 
 #define THREAD 1024
 
@@ -56,6 +57,8 @@ int main(int argc, char** argv) {
 
   // --
   // Transpose
+  GpuTimer timer;
+  timer.Start();
 
   if(debug) fprintf(stderr, "proj.cu: computing transpose\n");
 
@@ -116,6 +119,9 @@ int main(int argc, char** argv) {
   int proj_num_edges; P.nvals(&proj_num_edges);
   std::cerr << "proj_num_edges=" << proj_num_edges << std::endl;
   std::cerr << "num_cols=" << num_cols << std::endl;
+
+  timer.Stop();
+  std::cerr << "timer=" << timer.ElapsedMillis() << std::endl;
 
   if(print_results) {
     int* h_proj_rowptr = (int*)malloc((num_cols + 1) * sizeof(int));
