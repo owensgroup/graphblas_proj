@@ -13,16 +13,27 @@
 
 #include "cli.h"
 
+#define THREAD 1024
+
 typedef graphblas::Matrix<float> Matrix;
 
+__global__ void __fill_constant(float* d_x, float val, int n) {
+  int i = threadIdx.x + blockIdx.x * blockDim.x;
+  if(i < n) {
+    d_x[i] = val;
+  }
+}
+
 int main(int argc, char** argv) {
+
   // --
   // CLI
 
   po::variables_map vm;
 
   parseArgsProj(argc, argv, vm);
-  bool verbose = vm["proj-debug"].as<bool>();
+  bool verbose    = vm["proj-debug"].as<bool>();
+  bool unweighted = vm["unweighted"].as<bool>();
 
   graphblas::Descriptor desc;
   desc.loadArgs(vm);
@@ -67,6 +78,14 @@ int main(int argc, char** argv) {
   tX.build(tx_rowptr, tx_colidx, tx_val, num_edges);
 
   // --
+  // Change matrix edge weights
+  int block = 1 + num_edges / THREAD;
+  if(unweighted) {
+    __fill_constant<<<block, THREAD>>>(X.matrix_.sparse_.d_csrVal_, 1.0f, num_edges);
+    __fill_constant<<<block, THREAD>>>(tX.matrix_.sparse_.d_csrVal_, 1.0f, num_edges);
+  }
+
+  // --
   // Projection
 
   Matrix P(num_cols, num_cols);
@@ -79,4 +98,39 @@ int main(int argc, char** argv) {
     &X,
     &desc
   );
+
+  // --
+  // Read results
+
+  int proj_num_edges; P.nvals(&proj_num_edges);
+  std::cerr << "proj_num_edges=" << proj_num_edges << std::endl;
+  std::cerr << "num_cols=" << num_cols << std::endl;
+
+  if(verbose) {
+    int* h_proj_rowptr = (int*)malloc((num_cols + 1) * sizeof(int));
+    int* h_proj_colidx = (int*)malloc(proj_num_edges * sizeof(int));
+    float* h_proj_val  = (float*)malloc(proj_num_edges * sizeof(float));
+
+    cudaMemcpy(h_proj_rowptr, P.matrix_.sparse_.d_csrRowPtr_, (num_cols + 1) * sizeof(int),   cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_proj_colidx, P.matrix_.sparse_.d_csrColInd_, proj_num_edges * sizeof(int),   cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_proj_val,    P.matrix_.sparse_.d_csrVal_,    proj_num_edges * sizeof(float), cudaMemcpyDeviceToHost);
+
+    for(int i = 0; i < num_cols; i++) {
+      int start = h_proj_rowptr[i];
+      int end   = h_proj_rowptr[i + 1];
+      for(int offset = start; offset < end; offset++) {
+        printf("%d %d %f\n", i, h_proj_colidx[offset], h_proj_val[offset]);
+      }
+    }
+    free(h_proj_rowptr);
+    free(h_proj_colidx);
+    free(h_proj_val);
+  }
+
+  // --
+  // Free memory
+
+  cudaFree(tx_colidx);
+  cudaFree(tx_rowptr);
+  cudaFree(tx_val);
 }

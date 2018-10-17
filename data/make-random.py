@@ -22,4 +22,4 @@ if __name__ == "__main__":
     args = parse_args()
     X = sparse.random(args.num_rows, args.num_cols, args.density)
     X.data = np.ones(X.nnz, dtype=np.float32)
-    mmwrite('data/X', X, symmetry='symmetric')
+    mmwrite('data/X', X)
