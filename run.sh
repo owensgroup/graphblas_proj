@@ -10,6 +10,6 @@ export GRAPHBLAS_PATH=$HOME/projects/davis/GraphBLAS
 make clean
 make
 
-python data/make-random.py --num-rows 5 --num-cols 6 --density 1.0
-./proj --X data/X.mtx --unweighted 1 # --proj-debug 1
+python data/make-random.py --num-rows 40000 --num-cols 40000 --density 0.01
+./proj --X data/X.mtx --unweighted 1 --proj-debug 1 --print-results 0
 

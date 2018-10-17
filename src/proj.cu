@@ -32,8 +32,9 @@ int main(int argc, char** argv) {
   po::variables_map vm;
 
   parseArgsProj(argc, argv, vm);
-  bool verbose    = vm["proj-debug"].as<bool>();
-  bool unweighted = vm["unweighted"].as<bool>();
+  bool debug       = vm["proj-debug"].as<bool>();
+  bool unweighted    = vm["unweighted"].as<bool>();
+  bool print_results = vm["print-results"].as<bool>();
 
   graphblas::Descriptor desc;
   desc.loadArgs(vm);
@@ -47,13 +48,16 @@ int main(int argc, char** argv) {
   graphblas::Index num_edges;
 
   std::string X_path = vm["X"].as<std::string>();
-
+  if(debug) fprintf(stderr, "proj.cu: loading %s\n", X_path.c_str());
   readMtx(X_path.c_str(), rowidx, colidx, val, num_rows, num_cols, num_edges, 1, false);
   Matrix X(num_rows, num_cols);
   X.build(&rowidx, &colidx, &val, num_edges, GrB_NULL);
+  if(debug) fprintf(stderr, "\tdone\n");
 
   // --
   // Transpose
+
+  if(debug) fprintf(stderr, "proj.cu: computing transpose\n");
 
   cusparseHandle_t handle = 0;
   cusparseStatus_t status = cusparseCreate(&handle);
@@ -77,8 +81,11 @@ int main(int argc, char** argv) {
   Matrix tX(num_cols, num_rows);
   tX.build(tx_rowptr, tx_colidx, tx_val, num_edges);
 
+  if(debug) fprintf(stderr, "\tdone\n");
+
   // --
   // Change matrix edge weights
+
   int block = 1 + num_edges / THREAD;
   if(unweighted) {
     __fill_constant<<<block, THREAD>>>(X.matrix_.sparse_.d_csrVal_, 1.0f, num_edges);
@@ -87,6 +94,8 @@ int main(int argc, char** argv) {
 
   // --
   // Projection
+
+  if(debug) fprintf(stderr, "proj.cu: computing projection\n");
 
   Matrix P(num_cols, num_cols);
   graphblas::mxm<float,float,float,float>(
@@ -99,6 +108,8 @@ int main(int argc, char** argv) {
     &desc
   );
 
+  if(debug) fprintf(stderr, "\tdone\n");
+
   // --
   // Read results
 
@@ -106,7 +117,7 @@ int main(int argc, char** argv) {
   std::cerr << "proj_num_edges=" << proj_num_edges << std::endl;
   std::cerr << "num_cols=" << num_cols << std::endl;
 
-  if(verbose) {
+  if(print_results) {
     int* h_proj_rowptr = (int*)malloc((num_cols + 1) * sizeof(int));
     int* h_proj_colidx = (int*)malloc(proj_num_edges * sizeof(int));
     float* h_proj_val  = (float*)malloc(proj_num_edges * sizeof(float));
@@ -119,7 +130,9 @@ int main(int argc, char** argv) {
       int start = h_proj_rowptr[i];
       int end   = h_proj_rowptr[i + 1];
       for(int offset = start; offset < end; offset++) {
-        printf("%d %d %f\n", i, h_proj_colidx[offset], h_proj_val[offset]);
+        if(i != h_proj_colidx[offset]) { // Don't print self loops
+          printf("%d %d %f\n", i, h_proj_colidx[offset], h_proj_val[offset]);
+        }
       }
     }
     free(h_proj_rowptr);
@@ -130,7 +143,6 @@ int main(int argc, char** argv) {
   // --
   // Free memory
 
-  cudaFree(tx_colidx);
-  cudaFree(tx_rowptr);
-  cudaFree(tx_val);
+  X.clear();
+  tX.clear();
 }

@@ -69,9 +69,10 @@ void parseArgsProj(int argc, char**argv, po::variables_map& vm) {
         "True means show memory info")
 
     // SGM params
-    ("X",          po::value<std::string>()->default_value((std::string)"data/X.mtx"), "path to X.mtx"         )
-    ("unweighted", po::value<bool>()->default_value(false),                            "unweighted projection" )
-    ("proj-debug", po::value<bool>()->default_value(false),                            "print proj debug info" );
+    ("X",             po::value<std::string>()->default_value((std::string)"data/X.mtx"), "path to X.mtx"         )
+    ("unweighted",    po::value<bool>()->default_value(false),                            "unweighted projection" )
+    ("print-results", po::value<bool>()->default_value(false),                            "print results" )
+    ("proj-debug",    po::value<bool>()->default_value(false),                            "print proj debug info" );
 
   po::store(po::parse_command_line(argc, argv, desc), vm);
   po::notify(vm);
