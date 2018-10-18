@@ -27,8 +27,7 @@ __global__ void __fill_constant(float* d_x, float val, int n) {
 }
 
 int main(int argc, char** argv) {
-  bool chunked = true;
-  int num_chunks = 11;
+
   // --
   // CLI
 
@@ -39,6 +38,8 @@ int main(int argc, char** argv) {
   bool unweighted    = vm["unweighted"].as<bool>();
   bool print_results = vm["print-results"].as<bool>();
   bool onto_cols     = vm["onto-cols"].as<bool>();
+  int  num_chunks    = vm["num-chunks"].as<int>();
+  bool chunked       = num_chunks > 0;
 
   graphblas::Descriptor desc;
   desc.loadArgs(vm);
@@ -114,7 +115,11 @@ int main(int argc, char** argv) {
   Matrix P(dim_out, dim_out);
 
   if(chunked) {
-    chunked_mxm(&P, &tX, &X, &desc, num_chunks);
+    if(onto_cols) {
+      chunked_mxm(&P, &tX, &X, &desc, num_chunks);
+    } else
+      chunked_mxm(&P, &X, &tX, &desc, num_chunks);
+    }
   } else {
     if(onto_cols) {
       easy_mxm(&P, &tX, &X, &desc);
