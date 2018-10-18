@@ -33,9 +33,10 @@ int main(int argc, char** argv) {
   po::variables_map vm;
 
   parseArgsProj(argc, argv, vm);
-  bool debug       = vm["proj-debug"].as<bool>();
+  bool debug         = vm["proj-debug"].as<bool>();
   bool unweighted    = vm["unweighted"].as<bool>();
   bool print_results = vm["print-results"].as<bool>();
+  bool onto_cols     = vm["onto-cols"].as<bool>();
 
   graphblas::Descriptor desc;
   desc.loadArgs(vm);
@@ -43,10 +44,10 @@ int main(int argc, char** argv) {
   // ---
   // IO
 
-  std::vector<graphblas::Index> rowidx, colidx;
+  std::vector<int> rowidx, colidx;
   std::vector<float> val;
-  graphblas::Index num_rows, num_cols;
-  graphblas::Index num_edges;
+  int num_rows, num_cols;
+  int num_edges;
 
   std::string X_path = vm["X"].as<std::string>();
   if(debug) fprintf(stderr, "proj.cu: loading %s\n", X_path.c_str());
@@ -99,17 +100,37 @@ int main(int argc, char** argv) {
   // Projection
 
   if(debug) fprintf(stderr, "proj.cu: computing projection\n");
+  int dim_out;
 
-  Matrix P(num_cols, num_cols);
-  graphblas::mxm<float,float,float,float>(
-    &P,
-    GrB_NULL,
-    GrB_NULL,
-    graphblas::PlusMultipliesSemiring<float>(),
-    &tX,
-    &X,
-    &desc
-  );
+  if(onto_cols) {
+    dim_out = num_cols;
+  } else {
+    dim_out = num_rows;
+  }
+
+  Matrix P(dim_out, dim_out);
+
+  if(onto_cols) {
+    graphblas::mxm<float,float,float,float>(
+      &P,
+      GrB_NULL,
+      GrB_NULL,
+      graphblas::PlusMultipliesSemiring<float>(),
+      &tX,
+      &X,
+      &desc
+    );
+  } else {
+    graphblas::mxm<float,float,float,float>(
+      &P,
+      GrB_NULL,
+      GrB_NULL,
+      graphblas::PlusMultipliesSemiring<float>(),
+      &X,
+      &tX,
+      &desc
+    );
+  }
 
   if(debug) fprintf(stderr, "\tdone\n");
 
@@ -117,22 +138,23 @@ int main(int argc, char** argv) {
   // Read results
 
   int proj_num_edges; P.nvals(&proj_num_edges);
-  std::cerr << "proj_num_edges=" << proj_num_edges << std::endl;
-  std::cerr << "num_cols=" << num_cols << std::endl;
+  std::cerr << "proj_num_edges          = " << proj_num_edges << std::endl;
+  std::cerr << "dim_out                 = " << dim_out << std::endl;
+  std::cerr << "proj_num_edges (noloop) = " << proj_num_edges - dim_out << std::endl;
 
   timer.Stop();
   std::cerr << "timer=" << timer.ElapsedMillis() << std::endl;
 
   if(print_results) {
-    int* h_proj_rowptr = (int*)malloc((num_cols + 1) * sizeof(int));
+    int* h_proj_rowptr = (int*)malloc((dim_out + 1) * sizeof(int));
     int* h_proj_colidx = (int*)malloc(proj_num_edges * sizeof(int));
     float* h_proj_val  = (float*)malloc(proj_num_edges * sizeof(float));
 
-    cudaMemcpy(h_proj_rowptr, P.matrix_.sparse_.d_csrRowPtr_, (num_cols + 1) * sizeof(int),   cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_proj_rowptr, P.matrix_.sparse_.d_csrRowPtr_, (dim_out + 1) * sizeof(int),   cudaMemcpyDeviceToHost);
     cudaMemcpy(h_proj_colidx, P.matrix_.sparse_.d_csrColInd_, proj_num_edges * sizeof(int),   cudaMemcpyDeviceToHost);
     cudaMemcpy(h_proj_val,    P.matrix_.sparse_.d_csrVal_,    proj_num_edges * sizeof(float), cudaMemcpyDeviceToHost);
 
-    for(int i = 0; i < num_cols; i++) {
+    for(int i = 0; i < dim_out; i++) {
       int start = h_proj_rowptr[i];
       int end   = h_proj_rowptr[i + 1];
       for(int offset = start; offset < end; offset++) {
