@@ -13,6 +13,7 @@
 
 #include "cli.h"
 #include "timer.cuh"
+#include "utils.cuh"
 
 #define THREAD 1024
 
@@ -55,6 +56,7 @@ int main(int argc, char** argv) {
   Matrix X(num_rows, num_cols);
   X.build(&rowidx, &colidx, &val, num_edges, GrB_NULL);
   if(debug) fprintf(stderr, "\tdone\n");
+
 
   // --
   // Transpose
@@ -110,27 +112,13 @@ int main(int argc, char** argv) {
 
   Matrix P(dim_out, dim_out);
 
-  if(onto_cols) {
-    graphblas::mxm<float,float,float,float>(
-      &P,
-      GrB_NULL,
-      GrB_NULL,
-      graphblas::PlusMultipliesSemiring<float>(),
-      &tX,
-      &X,
-      &desc
-    );
-  } else {
-    graphblas::mxm<float,float,float,float>(
-      &P,
-      GrB_NULL,
-      GrB_NULL,
-      graphblas::PlusMultipliesSemiring<float>(),
-      &X,
-      &tX,
-      &desc
-    );
-  }
+  int num_chunks = 2;
+  chunked_mxm(&P, &tX, &X, &desc, num_chunks);
+  // if(onto_cols) {
+  //   easy_mxm(&P, &tX, &X, &desc);
+  // } else {
+  //   easy_mxm(&P, &X, &tX, &desc);
+  // }
 
   if(debug) fprintf(stderr, "\tdone\n");
 
