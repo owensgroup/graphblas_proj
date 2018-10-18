@@ -124,14 +124,21 @@ void chunked_mxm(
     // --
     // Print for debugging
 
+    std::vector<int> rows, cols;
+    std::vector<float> vals;
     for(int chunk = 0; chunk < num_chunks; chunk++) {
         int chunk_start = chunk * chunk_size;
         int chunk_end   = min((chunk + 1) * chunk_size, A_nrows);
         int chunk_rows  = chunk_end - chunk_start;
         for(int i = 0; i < chunk_rows; i++) {
             for(int offset = h_chunked_ptr[chunk][i]; offset < h_chunked_ptr[chunk][i + 1]; offset++) {
-                std::cerr << chunk_start + i << " " << h_chunked_ind[chunk][offset] << " " << h_chunked_val[chunk][offset] << std::endl;
+                // std::cerr << chunk_start + i << " " << h_chunked_ind[chunk][offset] << " " << h_chunked_val[chunk][offset] << std::endl;
+                rows.push_back(chunk_start + i);
+                cols.push_back(h_chunked_ind[chunk][offset]);
+                vals.push_back(h_chunked_val[chunk][offset]);
             }
         }
     }
+
+    out->build(&rows, &cols, &vals, vals.size(), GrB_NULL);
 }

@@ -27,7 +27,8 @@ __global__ void __fill_constant(float* d_x, float val, int n) {
 }
 
 int main(int argc, char** argv) {
-
+  bool chunked = true;
+  int num_chunks = 11;
   // --
   // CLI
 
@@ -112,14 +113,17 @@ int main(int argc, char** argv) {
 
   Matrix P(dim_out, dim_out);
 
-  int num_chunks = 2;
-  chunked_mxm(&P, &tX, &X, &desc, num_chunks);
-  // if(onto_cols) {
-  //   easy_mxm(&P, &tX, &X, &desc);
-  // } else {
-  //   easy_mxm(&P, &X, &tX, &desc);
-  // }
+  if(chunked) {
+    chunked_mxm(&P, &tX, &X, &desc, num_chunks);
+  } else {
+    if(onto_cols) {
+      easy_mxm(&P, &tX, &X, &desc);
+    } else {
+      easy_mxm(&P, &X, &tX, &desc);
+    }
+  }
 
+  timer.Stop();
   if(debug) fprintf(stderr, "\tdone\n");
 
   // --
@@ -129,18 +133,14 @@ int main(int argc, char** argv) {
   std::cerr << "proj_num_edges          = " << proj_num_edges << std::endl;
   std::cerr << "dim_out                 = " << dim_out << std::endl;
   std::cerr << "proj_num_edges (noloop) = " << proj_num_edges - dim_out << std::endl;
-
-  timer.Stop();
-  std::cerr << "timer=" << timer.ElapsedMillis() << std::endl;
+  std::cerr << "timer                   = "  << timer.ElapsedMillis() << std::endl;
 
   if(print_results) {
-    int* h_proj_rowptr = (int*)malloc((dim_out + 1) * sizeof(int));
-    int* h_proj_colidx = (int*)malloc(proj_num_edges * sizeof(int));
-    float* h_proj_val  = (float*)malloc(proj_num_edges * sizeof(float));
+    if(!chunked) P.matrix_.sparse_.gpuToCpu();
 
-    cudaMemcpy(h_proj_rowptr, P.matrix_.sparse_.d_csrRowPtr_, (dim_out + 1) * sizeof(int),   cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_proj_colidx, P.matrix_.sparse_.d_csrColInd_, proj_num_edges * sizeof(int),   cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_proj_val,    P.matrix_.sparse_.d_csrVal_,    proj_num_edges * sizeof(float), cudaMemcpyDeviceToHost);
+    int* h_proj_rowptr = P.matrix_.sparse_.h_csrRowPtr_;
+    int* h_proj_colidx = P.matrix_.sparse_.h_csrColInd_;
+    float* h_proj_val  = P.matrix_.sparse_.h_csrVal_;
 
     for(int i = 0; i < dim_out; i++) {
       int start = h_proj_rowptr[i];
