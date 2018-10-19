@@ -73,7 +73,7 @@ void parseArgsProj(int argc, char**argv, po::variables_map& vm) {
     ("unweighted",    po::value<bool>()->default_value(false),                            "unweighted projection" )
     ("print-results", po::value<bool>()->default_value(false),                            "print results" )
     ("proj-debug",    po::value<bool>()->default_value(false),                            "print proj debug info" )
-    ("onto-cols",     po::value<bool>()->default_value(true),                             "project onto cols instead of rows" );
+    ("onto-cols",     po::value<bool>()->default_value(true),                             "project onto cols instead of rows" )
     ("num-chunks",    po::value<int>()->default_value(0),                                 "number of chunks" );
 
   po::store(po::parse_command_line(argc, argv, desc), vm);

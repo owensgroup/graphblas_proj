@@ -104,44 +104,48 @@ int main(int argc, char** argv) {
   // Projection
 
   if(debug) fprintf(stderr, "proj.cu: computing projection\n");
-  int dim_out;
 
-  if(onto_cols) {
-    dim_out = num_cols;
-  } else {
-    dim_out = num_rows;
-  }
+  int dim_out = onto_cols ? num_cols : num_rows;
 
-  Matrix P(dim_out, dim_out);
+  Matrix P(dim_out, dim_out);   // unchunked output
+
+  int** h_chunked_ptr   = NULL; // chunked output
+  int** h_chunked_ind   = NULL; // chunked output
+  float** h_chunked_val = NULL; // chunked output
+
+  uint64_t proj_num_edges = 0;
 
   if(chunked) {
+    h_chunked_ptr = new int*[num_chunks];
+    h_chunked_ind = new int*[num_chunks];
+    h_chunked_val = new float*[num_chunks];
+
     if(onto_cols) {
-      chunked_mxm(&P, &tX, &X, &desc, num_chunks);
-    } else
-      chunked_mxm(&P, &X, &tX, &desc, num_chunks);
+      proj_num_edges = chunked_mxm(h_chunked_ptr, h_chunked_ind, h_chunked_val, &tX, &X, &desc, num_chunks);
+    } else {
+      proj_num_edges = chunked_mxm(h_chunked_ptr, h_chunked_ind, h_chunked_val, &X, &tX, &desc, num_chunks);
     }
   } else {
     if(onto_cols) {
-      easy_mxm(&P, &tX, &X, &desc);
+      proj_num_edges = easy_mxm(&P, &tX, &X, &desc);
     } else {
-      easy_mxm(&P, &X, &tX, &desc);
+      proj_num_edges = easy_mxm(&P, &X, &tX, &desc);
     }
   }
-
   timer.Stop();
+
   if(debug) fprintf(stderr, "\tdone\n");
 
   // --
   // Read results
 
-  int proj_num_edges; P.nvals(&proj_num_edges);
   std::cerr << "proj_num_edges          = " << proj_num_edges << std::endl;
   std::cerr << "dim_out                 = " << dim_out << std::endl;
   std::cerr << "proj_num_edges (noloop) = " << proj_num_edges - dim_out << std::endl;
-  std::cerr << "timer                   = "  << timer.ElapsedMillis() << std::endl;
+  std::cerr << "timer                   = " << timer.ElapsedMillis() << std::endl;
 
-  if(print_results) {
-    if(!chunked) P.matrix_.sparse_.gpuToCpu();
+  if(print_results && !chunked) {
+    P.matrix_.sparse_.gpuToCpu();
 
     int* h_proj_rowptr = P.matrix_.sparse_.h_csrRowPtr_;
     int* h_proj_colidx = P.matrix_.sparse_.h_csrColInd_;
