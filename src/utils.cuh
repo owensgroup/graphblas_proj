@@ -1,4 +1,4 @@
-
+// utils.cuh
 
 uint64_t easy_mxm(
     graphblas::Matrix<float>* out,
@@ -16,10 +16,12 @@ uint64_t easy_mxm(
         B,
         desc
     );
+    
     int num_edges; out->nvals(&num_edges);
-    if(num_edges < 0) {
+    
+    if(num_edges < 0)
         std::cerr << "overflow!" << std::endl;
-    }
+        
     return (uint64_t)num_edges;
 }
 
@@ -93,13 +95,16 @@ uint64_t chunked_mxm(
         // Copy back to CPU
 
         if(copy_to_host) {
-            h_chunked_ptr[chunk] = (int*)malloc((chunk_rows + 1) * sizeof(int));
-            h_chunked_ind[chunk] = (int*)malloc(C_chunk_edges * sizeof(int));
-            h_chunked_val[chunk] = (float*)malloc(C_chunk_edges * sizeof(float));
+            cudaMallocHost((void**)&h_chunked_ptr[chunk], (chunk_rows + 1) * sizeof(int));
+            cudaMallocHost((void**)&h_chunked_ind[chunk], C_chunk_edges * sizeof(int));
+            cudaMallocHost((void**)&h_chunked_val[chunk], C_chunk_edges * sizeof(float));
 
-            cudaMemcpy(h_chunked_ptr[chunk], C_chunk.matrix_.sparse_.d_csrRowPtr_, (chunk_rows + 1) * sizeof(int), cudaMemcpyDeviceToHost);
-            cudaMemcpy(h_chunked_ind[chunk], C_chunk.matrix_.sparse_.d_csrColInd_, C_chunk_edges * sizeof(int), cudaMemcpyDeviceToHost);
-            cudaMemcpy(h_chunked_val[chunk], C_chunk.matrix_.sparse_.d_csrVal_, C_chunk_edges * sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_chunked_ptr[chunk], C_chunk.matrix_.sparse_.d_csrRowPtr_, (chunk_rows + 1) * sizeof(int),
+                cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_chunked_ind[chunk], C_chunk.matrix_.sparse_.d_csrColInd_, C_chunk_edges * sizeof(int),
+                cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_chunked_val[chunk], C_chunk.matrix_.sparse_.d_csrVal_, C_chunk_edges * sizeof(float),
+                cudaMemcpyDeviceToHost);
         }
 
         A_chunk.clear();

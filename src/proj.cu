@@ -1,3 +1,5 @@
+// proj.cu
+
 #define GRB_USE_APSPIE
 #define private public
 #include <iostream>
@@ -54,9 +56,12 @@ int main(int argc, char** argv) {
 
   std::string X_path = vm["X"].as<std::string>();
   if(debug) fprintf(stderr, "proj.cu: loading %s\n", X_path.c_str());
+  
   readMtx(X_path.c_str(), rowidx, colidx, val, num_rows, num_cols, num_edges, 1, false);
+  
   Matrix X(num_rows, num_cols);
   X.build(&rowidx, &colidx, &val, num_edges, GrB_NULL);
+  
   if(debug) fprintf(stderr, "\tdone\n");
 
 
@@ -163,10 +168,22 @@ int main(int argc, char** argv) {
     free(h_proj_rowptr);
     free(h_proj_colidx);
     free(h_proj_val);
+    P.clear();
   }
 
   // --
   // Free memory
+
+  if(chunked) {
+    for(int chunk = 0; chunk < num_chunks; chunk++) {
+      cudaFreeHost(h_chunked_ptr[chunk]);
+      cudaFreeHost(h_chunked_ind[chunk]);
+      cudaFreeHost(h_chunked_val[chunk]);
+    }
+    free(h_chunked_ptr);
+    free(h_chunked_ind);
+    free(h_chunked_val);
+  }
 
   X.clear();
   tX.clear();
