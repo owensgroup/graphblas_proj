@@ -32,6 +32,12 @@ __global__ void __fill_constant(float* d_x, float val, int n) {
   if(i < n) d_x[i] = val;
 }
 
+__global__ void __subtract(int * x, int c, int n) {
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < n) x[i] -= c;
+}
+
+
 void read_binary(std::string filename) {
   FILE* file = fopen(filename.c_str(), "rb");
   
@@ -134,49 +140,89 @@ int main(int argc, char** argv) {
   // --
   // Copy data to gpus
   
+  int chunk_size = (nrows_t + n_gpus - 1) / n_gpus;
+  
   int** all_indptr    = (int**  )malloc(n_gpus * sizeof(int*  ));
   int** all_indices   = (int**  )malloc(n_gpus * sizeof(int*  ));
   float** all_data    = (float**)malloc(n_gpus * sizeof(float*));
 
-  int** all_indptr_t  = (int**  )malloc(n_gpus * sizeof(int*  ));
-  int** all_indices_t = (int**  )malloc(n_gpus * sizeof(int*  ));
-  float** all_data_t  = (float**)malloc(n_gpus * sizeof(float*));
+  int** chunked_indptr_t  = (int**  )malloc(n_gpus * sizeof(int*  ));
+  int** chunked_indices_t = (int**  )malloc(n_gpus * sizeof(int*  ));
+  float** chunked_data_t  = (float**)malloc(n_gpus * sizeof(float*));
+  
+  int* chunked_nrows  = (int*)malloc(n_gpus * sizeof(int));
+  int* chunked_nnzs   = (int*)malloc(n_gpus * sizeof(int));
   
   nvtxRangePushA("copy");
-  #pragma omp parallel for num_threads(n_gpus)
+  // #pragma omp parallel for num_threads(n_gpus)
   for(int i = 0; i < n_gpus; i++) {
     cudaSetDevice(i);
     
+    // Copy RHS    
     int* l_indptr; 
     int* l_indices;
     float* l_data;
-    
+
+    cudaMalloc(&l_indptr,    (nrows + 1)   * sizeof(int  )); 
+    cudaMalloc(&l_indices,   nnz           * sizeof(int  ));
+    cudaMalloc(&l_data,      nnz           * sizeof(float));
+
+    cudaMemcpy(l_indptr,    indptr,    (nrows + 1)   * sizeof(int  ), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(l_indices,   indices,   nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(l_data,      data,      nnz           * sizeof(float), cudaMemcpyDeviceToDevice);
+
+    all_indptr[i]  = l_indptr;
+    all_indices[i] = l_indices;
+    all_data[i]    = l_data;
+
+    // Prefetch LHS
     int* l_indptr_t; 
     int* l_indices_t;
     float* l_data_t;
-    
-    cudaMalloc(&l_indptr,  (nrows + 1) * sizeof(int  )); 
-    cudaMalloc(&l_indices, nnz         * sizeof(int  ));
-    cudaMalloc(&l_data,    nnz         * sizeof(float));
     
     cudaMalloc(&l_indptr_t,  (nrows_t + 1) * sizeof(int  )); 
     cudaMalloc(&l_indices_t, nnz           * sizeof(int  ));
     cudaMalloc(&l_data_t,    nnz           * sizeof(float));
     
-    cudaMemcpy(l_indptr,  i  ndptr,  (nrows + 1) * sizeof(int  ), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(l_indices,   indices, nnz         * sizeof(int  ), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(l_data,      data,    nnz         * sizeof(float), cudaMemcpyDeviceToDevice);
     cudaMemcpy(l_indptr_t,  indptr_t,  (nrows_t + 1) * sizeof(int  ), cudaMemcpyDeviceToDevice);
     cudaMemcpy(l_indices_t, indices_t, nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice);
     cudaMemcpy(l_data_t,    data_t,    nnz           * sizeof(float), cudaMemcpyDeviceToDevice);
+        
+    // Make chunks
+    int* c_indptr_t;
+    int* c_indices_t;
+    float* c_data_t;
+
+    int chunk_start = chunk_size * i;
+    int chunk_end   = chunk_size * (i + 1);
+    if(chunk_end > nrows_t) chunk_end = nrows_t;
     
-    all_indptr[i]    = l_indptr;
-    all_indices[i]   = l_indices;
-    all_data[i]      = l_data;
+    int chunk_start_offset;
+    int chunk_end_offset;
+    cudaMemcpy(&chunk_start_offset, l_indptr_t + chunk_start, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&chunk_end_offset,   l_indptr_t + chunk_end,   sizeof(int), cudaMemcpyDeviceToHost);
+
+    int chunk_rows = chunk_end - chunk_start;
+    int chunk_nnz  = chunk_end_offset - chunk_start_offset;
     
-    all_indptr_t[i]  = l_indptr_t;
-    all_indices_t[i] = l_indices_t;
-    all_data_t[i]    = l_data_t; 
+    cudaMalloc((void**)&c_indptr_t,  (chunk_rows + 1) * sizeof(int));
+    cudaMalloc((void**)&c_indices_t, chunk_nnz        * sizeof(int));
+    cudaMalloc((void**)&c_data_t,    chunk_nnz        * sizeof(float));
+    
+    cudaMemcpy(c_indptr_t,  l_indptr_t  + chunk_start,        (chunk_rows + 1) * sizeof(int),   cudaMemcpyDeviceToDevice);
+    cudaMemcpy(c_indices_t, l_indices_t + chunk_start_offset, chunk_nnz        * sizeof(int),   cudaMemcpyDeviceToDevice);
+    cudaMemcpy(c_data_t,    l_data_t    + chunk_start_offset, chunk_nnz        * sizeof(float), cudaMemcpyDeviceToDevice);
+
+    int blocks = 1 + chunk_rows / 1024;
+    if(chunk_start_offset > 0)
+        __subtract<<<blocks, 1024, 0>>>(c_indptr_t, chunk_start_offset, chunk_rows + 1);
+
+    chunked_indptr_t[i]  = c_indptr_t;
+    chunked_indices_t[i] = c_indices_t;
+    chunked_data_t[i]    = c_data_t; 
+    chunked_nrows[i]     = chunk_rows;
+    chunked_nnzs[i]      = chunk_nnz;
+    
   }
   nvtxRangePop();
   cudaSetDevice(0);
@@ -188,7 +234,10 @@ int main(int argc, char** argv) {
   t.start();
 
   nvtxRangePushA("work");
-  #pragma omp parallel for num_threads(n_gpus)
+  
+  int acc = 0;
+  
+  #pragma omp parallel for num_threads(n_gpus) reduction(+:acc)
   for(int i = 0; i < n_gpus; i++) {
     cudaSetDevice(i);
     
@@ -196,14 +245,14 @@ int main(int argc, char** argv) {
     int* p_indices;
     float* p_data;
 
-    int p_nrows = -1;
-    int p_ncols = -1;
-    int p_nnz   = -1;
+    int p_nrows;
+    int p_ncols;
+    int p_nnz;
     
     easy_mxm(
       handles[i],
-      nrows_t, ncols_t, nnz,
-      all_indptr_t[i], all_indices_t[i], all_data_t[i],
+      chunked_nrows[i], ncols_t, chunked_nnzs[i],
+      chunked_indptr_t[i], chunked_indices_t[i], chunked_data_t[i],
       
       nrows, ncols, nnz,
       all_indptr[i], all_indices[i], all_data[i],
@@ -211,6 +260,8 @@ int main(int argc, char** argv) {
       p_nrows, p_ncols, p_nnz,
       p_indptr, p_indices, p_data
     );
+    
+    acc += p_nnz;
   }
   
   for(int i = 0; i < n_gpus; i++) {
@@ -224,4 +275,5 @@ int main(int argc, char** argv) {
   float elapsed = t.elapsed();
   
   std::cout << "elapsed : " << elapsed << std::endl;
+  std::cout << "acc     : " << acc     << std::endl;
 }

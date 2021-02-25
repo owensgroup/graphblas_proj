@@ -174,16 +174,6 @@ void easy_mxm(
   cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
   cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
 
-  // cusparseMatDescr_t descrB;
-  // cusparseCreateMatDescr(&descrB);
-  // cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL);
-  // cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO);
-
-  // cusparseMatDescr_t descrC;
-  // cusparseCreateMatDescr(&descrC);
-  // cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL);
-  // cusparseSetMatIndexBase(descrC, CUSPARSE_INDEX_BASE_ZERO);
-  
   cusparseCreateCsrgemm2Info(&info);
   cudaDeviceSynchronize();
   
@@ -222,7 +212,6 @@ void easy_mxm(
   cudaMalloc((void**)&dC_columns, sizeof(int) * nnzC);
   cudaMalloc((void**)&dC_values, sizeof(double) * nnzC);
   
-  // Remark: set csrValC to null if only sparsity pattern is required.
   cusparseScsrgemm2(
     handle,
     A_num_rows, B_num_cols, A_num_cols, 
@@ -240,6 +229,4 @@ void easy_mxm(
   C_num_rows = A_num_rows;
   C_num_cols = B_num_cols;
   C_nnz      = nnzC; 
-  
-  std::cout << "C_nnz: " << C_nnz << std::endl;
 }
