@@ -149,16 +149,16 @@ void easy_mxm_legacy(
     
     int& C_num_rows,
     int& C_num_cols,
-    int& C_nnz
+    int& C_nnz,
     
-    // int* &dC_csrOffsets,
-    // int* &dC_columns,
-    // float* &dC_values
+    int* &dC_csrOffsets,
+    int* &dC_columns,
+    float* &dC_values
 ) {
 
-  int* dC_csrOffsets;
-  int* dC_columns;
-  float* dC_values;
+  // int* dC_csrOffsets;
+  // int* dC_columns;
+  // float* dC_values;
   
   cudaMalloc((void**)&dC_csrOffsets, sizeof(int) * (A_num_rows + 1));
   
@@ -170,30 +170,38 @@ void easy_mxm_legacy(
   int *nnzTotalDevHostPtr = &nnzC;
   
   float alpha = 1.0;
-  float beta  = NULL;
+  float* beta = NULL;
 
   cusparseHandle_t handle;
   cusparseCreate(&handle);  
   cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST);
 
-  cusparseMatDescr_t descr;
-  cusparseCreateMatDescr(&descr);
-  cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
-  cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
+  cusparseMatDescr_t descrA;
+  cusparseCreateMatDescr(&descrA);
+  cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO);
+
+  cusparseMatDescr_t descrB;
+  cusparseCreateMatDescr(&descrB);
+  cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO);
+
+  cusparseMatDescr_t descrC;
+  cusparseCreateMatDescr(&descrC);
+  cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(descrC, CUSPARSE_INDEX_BASE_ZERO);
   
   cusparseCreateCsrgemm2Info(&info);
-
-  std::cout << A_num_rows << " " << B_num_cols << " " << A_num_cols << " " << std::endl;
 
   cusparseStatus_t status;
   status = cusparseScsrgemm2_bufferSizeExt(
     handle,
     A_num_rows, B_num_cols, A_num_cols, 
     &alpha,
-    descr, A_nnz, dA_csrOffsets, dA_columns,
-    descr, B_nnz, dB_csrOffsets, dB_columns,
-    &beta,
-    descr, B_nnz, dB_csrOffsets, dB_columns,
+    descrA, A_nnz, dA_csrOffsets, dA_columns,
+    descrB, B_nnz, dB_csrOffsets, dB_columns,
+    beta,
+    descrB, B_nnz, dB_csrOffsets, dB_columns, // not used
     info, &bufferSize
   );
   
@@ -222,17 +230,16 @@ void easy_mxm_legacy(
     case CUSPARSE_STATUS_MATRIX_TYPE_NOT_SUPPORTED:
       std::cout << "Error: Matrix type not supported.\n";
   }
-  std::cout << "bufferSize: " << bufferSize << std::endl;
-  
+
   cudaMalloc(&buffer, bufferSize);
   
   status = cusparseXcsrgemm2Nnz(
     handle,
     A_num_rows, B_num_cols, A_num_cols, 
-    descr, A_nnz, dA_csrOffsets, dA_columns,
-    descr, B_nnz, dB_csrOffsets, dB_columns,
-    descr, 0,     dB_csrOffsets, dB_columns,
-    descr,        dC_csrOffsets, 
+    descrA, A_nnz, dA_csrOffsets, dA_columns,
+    descrB, B_nnz, dB_csrOffsets, dB_columns,
+    descrB, 0,     dB_csrOffsets, dB_columns, // not used
+    descrC,        dC_csrOffsets, 
     nnzTotalDevHostPtr, info, buffer
   );
   switch (status) {
@@ -261,36 +268,37 @@ void easy_mxm_legacy(
       std::cout << "Error: Matrix type not supported.\n";
   }
   
-  // if (NULL != nnzTotalDevHostPtr){
-  //     nnzC = *nnzTotalDevHostPtr;
-  // } else {
-  //     cudaMemcpy(&nnzC, dC_csrOffsets + A_num_rows, sizeof(int), cudaMemcpyDeviceToHost);
-  //     cudaMemcpy(&baseC, dC_csrOffsets, sizeof(int), cudaMemcpyDeviceToHost);
-  //     nnzC -= baseC;
-  // }
+  if (NULL != nnzTotalDevHostPtr){
+      nnzC = *nnzTotalDevHostPtr;
+  } else {
+      std::cout << "...." << std::endl;
+      cudaMemcpy(&nnzC, dC_csrOffsets + A_num_rows, sizeof(int), cudaMemcpyDeviceToHost);
+      cudaMemcpy(&baseC, dC_csrOffsets, sizeof(int), cudaMemcpyDeviceToHost);
+      nnzC -= baseC;
+  }
 
-  // // step 4: finish sparsity pattern and value of C
-  // cudaMalloc((void**)&dC_columns, sizeof(int) * nnzC);
-  // cudaMalloc((void**)&dC_values, sizeof(double) * nnzC);
+  // step 4: finish sparsity pattern and value of C
+  cudaMalloc((void**)&dC_columns, sizeof(int) * nnzC);
+  cudaMalloc((void**)&dC_values, sizeof(double) * nnzC);
   
-  // // Remark: set csrValC to null if only sparsity pattern is required.
-  // cusparseScsrgemm2(
-  //   handle,
-  //   A_num_rows, B_num_cols, A_num_cols, 
-  //   &alpha,
-  //   descr, A_nnz, dA_values, dA_csrOffsets, dA_columns,
-  //   descr, B_nnz, dB_values, dB_csrOffsets, dB_columns,
-  //   &beta,
-  //   descr, B_nnz, dB_values, dB_csrOffsets, dB_columns,
-  //   descr,        dC_values, dC_csrOffsets, dC_columns,
-  //   info, buffer
-  // );
+  // Remark: set csrValC to null if only sparsity pattern is required.
+  cusparseScsrgemm2(
+    handle,
+    A_num_rows, B_num_cols, A_num_cols, 
+    &alpha,
+    descrA, A_nnz, dA_values, dA_csrOffsets, dA_columns,
+    descrB, B_nnz, dB_values, dB_csrOffsets, dB_columns,
+    beta,
+    descrB, B_nnz, dB_values, dB_csrOffsets, dB_columns,
+    descrC,        dC_values, dC_csrOffsets, dC_columns,
+    info, buffer
+  );
 
-  // cusparseDestroyCsrgemm2Info(info);
+  cusparseDestroyCsrgemm2Info(info);
   
-  // std::cout << "nnzC: " << nnzC << std::endl;
+  std::cout << "nnzC: " << nnzC << std::endl;
   
-  // C_num_rows = A_num_rows;
-  // C_num_cols = B_num_cols;
-  // C_nnz      = nnzC; 
+  C_num_rows = A_num_rows;
+  C_num_cols = B_num_cols;
+  C_nnz      = nnzC; 
 }

@@ -55,22 +55,6 @@ void read_binary(std::string filename) {
   cudaMemcpy(d_indptr,  h_indptr,  (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice);
   cudaMemcpy(d_indices, h_indices, nnz         * sizeof(int), cudaMemcpyHostToDevice);
   cudaMemcpy(d_data,    h_data,    nnz         * sizeof(float), cudaMemcpyHostToDevice);
-  
-  std::cout << "--" << std::endl;
-  std::cout << "indptr  : ";
-  for(int i = 0; i < nrows + 1; i++)
-    std::cout << h_indptr[i] << " ";
-  std::cout << std::endl;
-
-  std::cout << "indices : ";
-  for(int i = 0; i < nnz; i++)
-    std::cout << h_indices[i] << " ";
-  std::cout << std::endl;
-
-  std::cout << "data    : ";
-  for(int i = 0; i < nnz; i++)
-    std::cout << h_data[i] << " ";
-  std::cout << std::endl;
 }
 
 
@@ -90,9 +74,9 @@ int main(int argc, char** argv) {
   cusparseHandle_t handle = 0;
   cusparseStatus_t status = cusparseCreate(&handle);
 
-  cudaMallocManaged((void**)&d_indptr_t,  (ncols + 1) * sizeof(int));
-  cudaMallocManaged((void**)&d_indices_t, nnz         * sizeof(int));
-  cudaMallocManaged((void**)&d_data_t,    nnz         * sizeof(float));
+  cudaMalloc((void**)&d_indptr_t,  (ncols + 1) * sizeof(int));
+  cudaMalloc((void**)&d_indices_t, nnz         * sizeof(int));
+  cudaMalloc((void**)&d_data_t,    nnz         * sizeof(float));
 
   size_t buffer_size;
   cusparseCsr2cscEx2_bufferSize(
@@ -127,31 +111,14 @@ int main(int argc, char** argv) {
   
   cudaDeviceSynchronize();
 
-  std::cout << "----" << std::endl;
-  
-  std::cout << "indptr_t : ";
-  for(int i = 0; i < ncols + 1; i++)
-    std::cout << d_indptr_t[i] << " ";
-  std::cout << std::endl;
-
-  std::cout << "indices_t : ";
-  for(int i = 0; i < nnz; i++)
-    std::cout << d_indices_t[i] << " ";
-  std::cout << std::endl;
-
-  std::cout << "data_t    : ";
-  for(int i = 0; i < nnz; i++)
-    std::cout << d_data_t[i] << " ";
-  std::cout << std::endl;
-  
   // --
   // Change matrix edge weights
 
-  // int block = 1 + nnz / THREAD;
-  // if(unweighted) {
-  //   __fill_constant<<<block, THREAD>>>(d_data,   1.0f, nnz);
-  //   __fill_constant<<<block, THREAD>>>(d_data_t, 1.0f, nnz);
-  // }
+  int block = 1 + nnz / THREAD;
+  if(unweighted) {
+    __fill_constant<<<block, THREAD>>>(d_data,   1.0f, nnz);
+    __fill_constant<<<block, THREAD>>>(d_data_t, 1.0f, nnz);
+  }
 
   // --
   // Projection
@@ -168,22 +135,26 @@ int main(int argc, char** argv) {
   easy_mxm_legacy(
     ncols, nrows, nnz,
     d_indptr_t, d_indices_t, d_data_t,
+    
+    // nrows, ncols, nnz,
+    // d_indptr, d_indices, d_data,
 
     nrows, ncols, nnz,
     d_indptr, d_indices, d_data,
     
-    p_nrows, p_ncols, p_nnz
-    // p_indptr, p_indices, p_data
+    p_nrows, p_ncols, p_nnz,
+    p_indptr, p_indices, p_data
   );
   cudaDeviceSynchronize();
   
   t.stop();
   float elapsed = t.elapsed();
   
-  std::cout << "elapsed : " << elapsed << std::endl;
-  std::cout << "p_nrows : " << p_nrows << std::endl;
-  std::cout << "p_ncols : " << p_ncols << std::endl;
-  std::cout << "p_nnz   : " << p_nnz << std::endl;
+  std::cout << "elapsed        : " << elapsed << std::endl;
+  std::cout << "p_nrows        : " << p_nrows << std::endl;
+  std::cout << "p_ncols        : " << p_ncols << std::endl;
+  std::cout << "p_nnz          : " << p_nnz << std::endl;
+  std::cerr << "p_nnz (noloop) : " << p_nnz - ncols << std::endl;
   
   // // --
   // // Copy to host

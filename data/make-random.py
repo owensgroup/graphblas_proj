@@ -21,5 +21,6 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     X = sparse.random(args.num_rows, args.num_cols, args.density)
+    X = ((X + X.T) > 0).astype(np.float32)
     X.data = np.ones(X.nnz, dtype=np.float32)
     mmwrite('data/X', X)
