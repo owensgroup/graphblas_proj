@@ -25,5 +25,3 @@ python reference.py data/ml_1000000.mtx
 python data/mtx2bin.py --inpath data/ml_5000000.mtx
 python reference.py data/ml_5000000.mtx
 ./proj data/ml_5000000.bin
-
-
