@@ -185,10 +185,7 @@ int main(int argc, char** argv) {
   GpuTimer t;
   t.start();
 
-  int chunk_size = (nrows_t + n_gpus - 1) / n_gpus;
-  std::cout << "chunk_size: " << chunk_size << std::endl;
-
-  // #pragma omp parallel for num_threads(n_gpus)
+  #pragma omp parallel for num_threads(n_gpus)
   for(int i = 0; i < n_gpus; i++) {
     cudaSetDevice(i);
     
@@ -199,16 +196,6 @@ int main(int argc, char** argv) {
     int p_nrows = -1;
     int p_ncols = -1;
     int p_nnz   = -1;
-    
-    int chunk_start = chunk_size * i;
-    int chunk_end   = chunk_size * (i + 1);
-    
-    if(chunk_end > nrows_t) chunk_end = nrows_t;
-    
-    int chunk_nnz = indptr_t[chunk_end] - indptr_t[chunk_start];
-    std::cout << "chunk_nnz: " << chunk_nnz << std::endl;
-    
-    // Take subset of rows of X_t
     
     easy_mxm(
       handles[i],
