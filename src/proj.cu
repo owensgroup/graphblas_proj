@@ -148,35 +148,37 @@ int main(int argc, char** argv) {
     cudaSetDevice(i);
     
     int* l_indptr; 
-    cudaMalloc(&l_indptr, (nrows + 1) * sizeof(int)); 
-    cudaMemcpy(l_indptr, indptr, (nrows + 1) * sizeof(int), cudaMemcpyDeviceToDevice);
-    all_indptr[i] = l_indptr;
-    
     int* l_indices;
-    cudaMalloc(&l_indices, nnz * sizeof(int));
-    cudaMemcpy(l_indices, indices, nnz * sizeof(int), cudaMemcpyDeviceToDevice);
-    all_indices[i] = l_indices;
-    
     float* l_data;
-    cudaMalloc(&l_data, nnz * sizeof(float)) ;
-    cudaMemcpy(l_data, data, nnz * sizeof(float), cudaMemcpyDeviceToDevice);
-    all_data[i] = l_data;
     
     int* l_indptr_t; 
-    cudaMalloc(&l_indptr_t, (nrows_t + 1) * sizeof(int)); 
-    cudaMemcpy(l_indptr_t, indptr_t, (nrows_t + 1) * sizeof(int), cudaMemcpyDeviceToDevice);
-    all_indptr_t[i] = l_indptr_t;
-    
     int* l_indices_t;
-    cudaMalloc(&l_indices_t, nnz * sizeof(int));
-    cudaMemcpy(l_indices_t, indices_t, nnz * sizeof(int), cudaMemcpyDeviceToDevice);
-    all_indices_t[i] = l_indices_t;
-    
     float* l_data_t;
-    cudaMalloc(&l_data_t, nnz * sizeof(float)) ;
-    cudaMemcpy(l_data_t, data_t, nnz * sizeof(float), cudaMemcpyDeviceToDevice);
-    all_data_t[i] = l_data_t;
+    
+    cudaMalloc(&l_indptr,  (nrows + 1) * sizeof(int  )); 
+    cudaMalloc(&l_indices, nnz         * sizeof(int  ));
+    cudaMalloc(&l_data,    nnz         * sizeof(float));
+    
+    cudaMalloc(&l_indptr_t,  (nrows_t + 1) * sizeof(int  )); 
+    cudaMalloc(&l_indices_t, nnz           * sizeof(int  ));
+    cudaMalloc(&l_data_t,    nnz           * sizeof(float));
+    
+    cudaMemcpy(l_indptr,  i  ndptr,  (nrows + 1) * sizeof(int  ), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(l_indices,   indices, nnz         * sizeof(int  ), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(l_data,      data,    nnz         * sizeof(float), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(l_indptr_t,  indptr_t,  (nrows_t + 1) * sizeof(int  ), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(l_indices_t, indices_t, nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(l_data_t,    data_t,    nnz           * sizeof(float), cudaMemcpyDeviceToDevice);
+    
+    all_indptr[i]    = l_indptr;
+    all_indices[i]   = l_indices;
+    all_data[i]      = l_data;
+    
+    all_indptr_t[i]  = l_indptr_t;
+    all_indices_t[i] = l_indices_t;
+    all_data_t[i]    = l_data_t; 
   }
+  nvtxRangePop();
   cudaSetDevice(0);
   
   // --
@@ -185,6 +187,7 @@ int main(int argc, char** argv) {
   GpuTimer t;
   t.start();
 
+  nvtxRangePushA("work");
   #pragma omp parallel for num_threads(n_gpus)
   for(int i = 0; i < n_gpus; i++) {
     cudaSetDevice(i);
@@ -215,6 +218,7 @@ int main(int argc, char** argv) {
     cudaDeviceSynchronize();
   }
   cudaSetDevice(0);
+  nvtxRangePop();
   
   t.stop();
   float elapsed = t.elapsed();
