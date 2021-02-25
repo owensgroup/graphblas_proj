@@ -133,6 +133,8 @@
 
 
 void easy_mxm(
+    cusparseHandle_t handle,
+  
     const int A_num_rows,
     const int A_num_cols,
     const int A_nnz,
@@ -155,61 +157,57 @@ void easy_mxm(
     int* &dC_columns,
     float* &dC_values
 ) {
-  
   cudaMalloc((void**)&dC_csrOffsets, sizeof(int) * (A_num_rows + 1));
   
   int baseC, nnzC;
   csrgemm2Info_t info = NULL;
-  size_t bufferSize = 0;
-  void *buffer = NULL;
+  size_t bufferSize   = 0;
+  void *buffer        = NULL;
   
   int *nnzTotalDevHostPtr = &nnzC;
   
   float alpha = 1.0;
   float* beta = NULL;
+  
+  cusparseMatDescr_t descr;
+  cusparseCreateMatDescr(&descr);
+  cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
 
-  cusparseHandle_t handle;
-  cusparseCreate(&handle);  
-  cusparseSetPointerMode(handle, CUSPARSE_POINTER_MODE_HOST);
+  // cusparseMatDescr_t descrB;
+  // cusparseCreateMatDescr(&descrB);
+  // cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL);
+  // cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO);
 
-  cusparseMatDescr_t descrA;
-  cusparseCreateMatDescr(&descrA);
-  cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL);
-  cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO);
-
-  cusparseMatDescr_t descrB;
-  cusparseCreateMatDescr(&descrB);
-  cusparseSetMatType(descrB, CUSPARSE_MATRIX_TYPE_GENERAL);
-  cusparseSetMatIndexBase(descrB, CUSPARSE_INDEX_BASE_ZERO);
-
-  cusparseMatDescr_t descrC;
-  cusparseCreateMatDescr(&descrC);
-  cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL);
-  cusparseSetMatIndexBase(descrC, CUSPARSE_INDEX_BASE_ZERO);
+  // cusparseMatDescr_t descrC;
+  // cusparseCreateMatDescr(&descrC);
+  // cusparseSetMatType(descrC, CUSPARSE_MATRIX_TYPE_GENERAL);
+  // cusparseSetMatIndexBase(descrC, CUSPARSE_INDEX_BASE_ZERO);
   
   cusparseCreateCsrgemm2Info(&info);
-
+  cudaDeviceSynchronize();
+  
   cusparseStatus_t status;
   status = cusparseScsrgemm2_bufferSizeExt(
     handle,
     A_num_rows, B_num_cols, A_num_cols, 
     &alpha,
-    descrA, A_nnz, dA_csrOffsets, dA_columns,
-    descrB, B_nnz, dB_csrOffsets, dB_columns,
+    descr, A_nnz, dA_csrOffsets, dA_columns,
+    descr, B_nnz, dB_csrOffsets, dB_columns,
     beta,
-    descrB, B_nnz, dB_csrOffsets, dB_columns, // not used
+    descr, B_nnz, dB_csrOffsets, dB_columns, // not used
     info, &bufferSize
   );
-
+  
   cudaMalloc(&buffer, bufferSize);
   
   status = cusparseXcsrgemm2Nnz(
     handle,
     A_num_rows, B_num_cols, A_num_cols, 
-    descrA, A_nnz, dA_csrOffsets, dA_columns,
-    descrB, B_nnz, dB_csrOffsets, dB_columns,
-    descrB, 0,     dB_csrOffsets, dB_columns, // not used
-    descrC,        dC_csrOffsets, 
+    descr, A_nnz, dA_csrOffsets, dA_columns,
+    descr, B_nnz, dB_csrOffsets, dB_columns,
+    descr, 0,     dB_csrOffsets, dB_columns, // not used
+    descr,        dC_csrOffsets, 
     nnzTotalDevHostPtr, info, buffer
   );
   
@@ -220,8 +218,7 @@ void easy_mxm(
       cudaMemcpy(&baseC, dC_csrOffsets, sizeof(int), cudaMemcpyDeviceToHost);
       nnzC -= baseC;
   }
-
-  // step 4: finish sparsity pattern and value of C
+  
   cudaMalloc((void**)&dC_columns, sizeof(int) * nnzC);
   cudaMalloc((void**)&dC_values, sizeof(double) * nnzC);
   
@@ -230,11 +227,11 @@ void easy_mxm(
     handle,
     A_num_rows, B_num_cols, A_num_cols, 
     &alpha,
-    descrA, A_nnz, dA_values, dA_csrOffsets, dA_columns,
-    descrB, B_nnz, dB_values, dB_csrOffsets, dB_columns,
+    descr, A_nnz, dA_values, dA_csrOffsets, dA_columns,
+    descr, B_nnz, dB_values, dB_csrOffsets, dB_columns,
     beta,
-    descrB, B_nnz, dB_values, dB_csrOffsets, dB_columns,
-    descrC,        dC_values, dC_csrOffsets, dC_columns,
+    descr, B_nnz, dB_values, dB_csrOffsets, dB_columns,
+    descr,        dC_values, dC_csrOffsets, dC_columns,
     info, buffer
   );
 
@@ -243,4 +240,6 @@ void easy_mxm(
   C_num_rows = A_num_rows;
   C_num_cols = B_num_cols;
   C_nnz      = nnzC; 
+  
+  std::cout << "C_nnz: " << C_nnz << std::endl;
 }

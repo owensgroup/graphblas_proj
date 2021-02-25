@@ -6,7 +6,8 @@ all: check-env proj
 proj: src/*
 	nvcc -g $(ARCH) $(OPTIONS) -w -std=c++11 -o proj \
 		src/proj.cu \
-		-lcusparse  \
+		--compiler-options "-fopenmp" \
+		-lcusparse -lnvToolsExt \
 		-Isrc/ 
 
 clean:

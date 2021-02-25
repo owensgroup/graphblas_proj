@@ -1,9 +1,12 @@
 
 #include <iostream>
 #include <cusparse.h>
+#include "omp.h"
+#include "nvToolsExt.h"
 
 #include "matmul.cuh"
 #include "timer.cuh"
+#include "utils.cuh"
 
 int nrows, ncols, nnz;
 
@@ -11,13 +14,13 @@ int* h_indptr;
 int* h_indices;
 float* h_data;
 
-int* d_indptr;
-int* d_indices;
-float* d_data;
+int* indptr;
+int* indices;
+float* data;
 
-int* d_indptr_t;
-int* d_indices_t;
-float* d_data_t;
+int* indptr_t;
+int* indices_t;
+float* data_t;
 
 #define THREAD 1024
 
@@ -48,42 +51,58 @@ void read_binary(std::string filename) {
   err = fread(h_indices, sizeof(int),   nnz,      file);
   err = fread(h_data,    sizeof(float), nnz,      file);
 
-  cudaMalloc((void**)&d_indptr,  (nrows + 1) * sizeof(int));
-  cudaMalloc((void**)&d_indices, nnz         * sizeof(int));
-  cudaMalloc((void**)&d_data,    nnz         * sizeof(float));
+  cudaMalloc((void**)&indptr,  (nrows + 1) * sizeof(int));
+  cudaMalloc((void**)&indices, nnz         * sizeof(int));
+  cudaMalloc((void**)&data,    nnz         * sizeof(float));
 
-  cudaMemcpy(d_indptr,  h_indptr,  (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_indices, h_indices, nnz         * sizeof(int), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_data,    h_data,    nnz         * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(indptr,  h_indptr,  (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(indices, h_indices, nnz         * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(data,    h_data,    nnz         * sizeof(float), cudaMemcpyHostToDevice);
 }
 
 
 int main(int argc, char** argv) {
+  
+  // --
+  // MGPU setup
+  
+  int n_gpus = get_num_gpus();
+  
+  cudaStream_t* streams     = new cudaStream_t[n_gpus];
+  cusparseHandle_t* handles = new cusparseHandle_t[n_gpus];
+
+	for (int i = 0; i < n_gpus; i++) {
+		cudaSetDevice(i);
+		cudaStreamCreate(&(streams[i]));
+    cusparseCreate(&(handles[i])); 
+    cusparseSetStream(handles[i], streams[i]);
+	}
+  cudaSetDevice(0);
+  
+  // --
+  // IO
+  
   read_binary(argv[1]);
 
   bool unweighted = true;
-  
-  GpuTimer t;
-  t.start();
+  if(unweighted) {
+    int block = 1 + nnz / THREAD;
+    __fill_constant<<<block, THREAD>>>(data,   1.0f, nnz);
+  }
   
   // --
-  // Transpose
+  // Transpose (gpu0)
 
-  cudaDeviceSynchronize();
-  
-  cusparseHandle_t handle = 0;
-  cusparseStatus_t status = cusparseCreate(&handle);
-
-  cudaMalloc((void**)&d_indptr_t,  (ncols + 1) * sizeof(int));
-  cudaMalloc((void**)&d_indices_t, nnz         * sizeof(int));
-  cudaMalloc((void**)&d_data_t,    nnz         * sizeof(float));
+  cudaMallocManaged((void**)&indptr_t,  (ncols + 1) * sizeof(int));
+  cudaMallocManaged((void**)&indices_t, nnz         * sizeof(int));
+  cudaMallocManaged((void**)&data_t,    nnz         * sizeof(float));
 
   size_t buffer_size;
   cusparseCsr2cscEx2_bufferSize(
-    handle,
+    handles[0],
     nrows, ncols, nnz,
-    d_data, d_indptr, d_indices,
-    d_data_t, d_indptr_t, d_indices_t,
+    data, indptr, indices,
+    data_t, indptr_t, indices_t,
     CUDA_R_32F,
     CUSPARSE_ACTION_NUMERIC,
     CUSPARSE_INDEX_BASE_ZERO,
@@ -91,86 +110,127 @@ int main(int argc, char** argv) {
     &buffer_size
   );
   
-  char* buffer;
-  cudaMalloc((void**)&buffer, sizeof(char)*buffer_size);
+  char* buffer; cudaMalloc((void**)&buffer, sizeof(char) * buffer_size);
 
   cusparseCsr2cscEx2(
-    handle,
+    handles[0],
     nrows, ncols, nnz,
-    d_data, d_indptr, d_indices,
-    d_data_t, d_indptr_t, d_indices_t,
+    data, indptr, indices,
+    data_t, indptr_t, indices_t,
     CUDA_R_32F,
     CUSPARSE_ACTION_NUMERIC,
     CUSPARSE_INDEX_BASE_ZERO,
     CUSPARSE_CSR2CSC_ALG1,
     buffer
   );
-  cusparseDestroy(handle);
-  
+
+  cudaDeviceSynchronize();
+
+  int nrows_t = ncols;
+  int ncols_t = nrows;
+
   // free(buffer); // when to free?
   
   // --
-  // Change matrix edge weights
+  // Copy data to gpus
+  
+  int** all_indptr    = (int**  )malloc(n_gpus * sizeof(int*  ));
+  int** all_indices   = (int**  )malloc(n_gpus * sizeof(int*  ));
+  float** all_data    = (float**)malloc(n_gpus * sizeof(float*));
 
-  int block = 1 + nnz / THREAD;
-  if(unweighted) {
-    __fill_constant<<<block, THREAD>>>(d_data,   1.0f, nnz);
-    __fill_constant<<<block, THREAD>>>(d_data_t, 1.0f, nnz);
+  int** all_indptr_t  = (int**  )malloc(n_gpus * sizeof(int*  ));
+  int** all_indices_t = (int**  )malloc(n_gpus * sizeof(int*  ));
+  float** all_data_t  = (float**)malloc(n_gpus * sizeof(float*));
+  
+  nvtxRangePushA("copy");
+  #pragma omp parallel for num_threads(n_gpus)
+  for(int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    
+    int* l_indptr; 
+    cudaMalloc(&l_indptr, (nrows + 1) * sizeof(int)); 
+    cudaMemcpy(l_indptr, indptr, (nrows + 1) * sizeof(int), cudaMemcpyDeviceToDevice);
+    all_indptr[i] = l_indptr;
+    
+    int* l_indices;
+    cudaMalloc(&l_indices, nnz * sizeof(int));
+    cudaMemcpy(l_indices, indices, nnz * sizeof(int), cudaMemcpyDeviceToDevice);
+    all_indices[i] = l_indices;
+    
+    float* l_data;
+    cudaMalloc(&l_data, nnz * sizeof(float)) ;
+    cudaMemcpy(l_data, data, nnz * sizeof(float), cudaMemcpyDeviceToDevice);
+    all_data[i] = l_data;
+    
+    int* l_indptr_t; 
+    cudaMalloc(&l_indptr_t, (nrows_t + 1) * sizeof(int)); 
+    cudaMemcpy(l_indptr_t, indptr_t, (nrows_t + 1) * sizeof(int), cudaMemcpyDeviceToDevice);
+    all_indptr_t[i] = l_indptr_t;
+    
+    int* l_indices_t;
+    cudaMalloc(&l_indices_t, nnz * sizeof(int));
+    cudaMemcpy(l_indices_t, indices_t, nnz * sizeof(int), cudaMemcpyDeviceToDevice);
+    all_indices_t[i] = l_indices_t;
+    
+    float* l_data_t;
+    cudaMalloc(&l_data_t, nnz * sizeof(float)) ;
+    cudaMemcpy(l_data_t, data_t, nnz * sizeof(float), cudaMemcpyDeviceToDevice);
+    all_data_t[i] = l_data_t;
   }
-
+  cudaSetDevice(0);
+  
   // --
-  // Projection
+  // Run on all GPUs
+  
+  GpuTimer t;
+  t.start();
 
-  int* p_indptr;
-  int* p_indices;
-  float* p_data;
-  
-  int p_nrows = -1;
-  int p_ncols = -1;
-  int p_nnz   = -1;
-  
-  easy_mxm(
-    ncols, nrows, nnz,
-    d_indptr_t, d_indices_t, d_data_t,
+  int chunk_size = (nrows_t + n_gpus - 1) / n_gpus;
+  std::cout << "chunk_size: " << chunk_size << std::endl;
+
+  // #pragma omp parallel for num_threads(n_gpus)
+  for(int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
     
-    nrows, ncols, nnz,
-    d_indptr, d_indices, d_data,
+    int* p_indptr;
+    int* p_indices;
+    float* p_data;
+
+    int p_nrows = -1;
+    int p_ncols = -1;
+    int p_nnz   = -1;
     
-    p_nrows, p_ncols, p_nnz,
-    p_indptr, p_indices, p_data
-  );
+    int chunk_start = chunk_size * i;
+    int chunk_end   = chunk_size * (i + 1);
+    
+    if(chunk_end > nrows_t) chunk_end = nrows_t;
+    
+    int chunk_nnz = indptr_t[chunk_end] - indptr_t[chunk_start];
+    std::cout << "chunk_nnz: " << chunk_nnz << std::endl;
+    
+    // Take subset of rows of X_t
+    
+    easy_mxm(
+      handles[i],
+      nrows_t, ncols_t, nnz,
+      all_indptr_t[i], all_indices_t[i], all_data_t[i],
+      
+      nrows, ncols, nnz,
+      all_indptr[i], all_indices[i], all_data[i],
+      
+      p_nrows, p_ncols, p_nnz,
+      p_indptr, p_indices, p_data
+    );
+  }
   
-  cudaDeviceSynchronize();
+  for(int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    cudaDeviceSynchronize();
+  }
+  cudaSetDevice(0);
   
   t.stop();
   float elapsed = t.elapsed();
   
-  std::cout << "elapsed        : " << elapsed << std::endl;
-  std::cout << "p_nrows        : " << p_nrows << std::endl;
-  std::cout << "p_ncols        : " << p_ncols << std::endl;
-  std::cout << "p_nnz          : " << p_nnz << std::endl;
-  std::cerr << "p_nnz (noloop) : " << p_nnz - ncols << std::endl;
-  
-  // // --
-  // // Copy to host
-  
-  // int* h_p_indptr  = (int*  )malloc((p_nrows + 1) * sizeof(int));
-  // int* h_p_indices = (int*  )malloc(p_nnz         * sizeof(int));
-  // float* h_p_data  = (float*)malloc(p_nnz         * sizeof(int));
-  
-  // cudaMemcpy(h_p_indptr,  p_indptr,  (p_nrows + 1) * sizeof(int  ), cudaMemcpyDeviceToHost);
-  // cudaMemcpy(h_p_indices, p_indices, p_nnz         * sizeof(int  ), cudaMemcpyDeviceToHost);
-  // cudaMemcpy(h_p_data,    p_data,    p_nnz         * sizeof(float), cudaMemcpyDeviceToHost);
-  
-  // for(int i = 0; i < 10; i++)
-  //   std::cout << h_p_indptr[i] << " ";
-  // std::cout << std::endl;
-
-  // for(int i = 0; i < 10; i++)
-  //   std::cout << h_p_indices[i] << " ";
-  // std::cout << std::endl;
-
-  // for(int i = 0; i < 10; i++)
-  //   std::cout << h_p_data[i] << " ";
-  // std::cout << std::endl;
+  std::cout << "elapsed : " << elapsed << std::endl;
 }
