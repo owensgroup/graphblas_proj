@@ -15,7 +15,7 @@ def parse_args():
     parser.add_argument('--num-rows', type=int, default=4096)
     parser.add_argument('--num-cols', type=int, default=2048)
     parser.add_argument('--density', type=float, default=0.01)
-    parser.add_argument('--seed', type=int, default=123)
+    # parser.add_argument('--seed', type=int, default=123)
     return parser.parse_args()
 
 if __name__ == "__main__":

@@ -6,18 +6,20 @@ inpath = sys.argv[1]
 
 x = mmread(inpath).tocsr()
 
-print(x.indptr[:10])
-print(x.indices[:10])
-print(x.data[:10])
+xT = x.T.tocsr()
+xT.sort_indices()
+
+print(x.indptr)
+print(x.indices)
+print(x.data)
+
+print(xT.indptr)
+print(xT.indices)
+print(xT.data)
+
 
 p = x.T @ x
 p.sort_indices()
-print('--')
-print(p.shape)
-print(p.indptr[:10])
-print(p.indices[:10])
-print(p.data[:10])
-print(p.nnz)
 
 # p = x @ x.T
 # p.sort_indices()

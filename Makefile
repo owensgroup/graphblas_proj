@@ -5,8 +5,8 @@ all: check-env proj
 
 proj: src/*
 	nvcc -g $(ARCH) $(OPTIONS) -w -std=c++11 -o proj \
-		src/proj.cu         \
-		-lcublas -lcusparse \
+		src/proj.cu \
+		-lcusparse  \
 		-Isrc/ 
 
 clean:
