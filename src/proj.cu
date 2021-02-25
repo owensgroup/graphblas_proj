@@ -109,8 +109,6 @@ int main(int argc, char** argv) {
   
   // free(buffer); // when to free?
   
-  cudaDeviceSynchronize();
-
   // --
   // Change matrix edge weights
 
@@ -131,20 +129,17 @@ int main(int argc, char** argv) {
   int p_ncols = -1;
   int p_nnz   = -1;
   
-  cudaDeviceSynchronize();
-  easy_mxm_legacy(
+  easy_mxm(
     ncols, nrows, nnz,
     d_indptr_t, d_indices_t, d_data_t,
     
-    // nrows, ncols, nnz,
-    // d_indptr, d_indices, d_data,
-
     nrows, ncols, nnz,
     d_indptr, d_indices, d_data,
     
     p_nrows, p_ncols, p_nnz,
     p_indptr, p_indices, p_data
   );
+  
   cudaDeviceSynchronize();
   
   t.stop();
