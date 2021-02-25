@@ -1,176 +1,291 @@
-#define GRB_USE_APSPIE
-#define private public
+
 #include <iostream>
-#include <iomanip>
-#include <algorithm>
-#include <string>
+#include <cusparse.h>
 
-#include <cstdio>
-#include <cstdlib>
+// #include <iomanip>
+// #include <algorithm>
+// #include <string>
 
-#include "graphblas/graphblas.hpp"
-#include "test/test.hpp"
+// #include <cstdio>
+// #include <cstdlib>
 
-#include "cli.h"
-#include "timer.cuh"
+// #include "graphblas/graphblas.hpp"
+// #include "test/test.hpp"
+
+// #include "cli.h"
+// #include "timer.cuh"
+
+int nrows, ncols, nnz;
+
+int* h_indptr;
+int* h_indices;
+float* h_data;
+
+int* d_indptr;
+int* d_indices;
+float* d_data;
+
+int* d_indptr_t;
+int* d_indices_t;
+float* d_data_t;
 
 #define THREAD 1024
 
-typedef graphblas::Matrix<float> Matrix;
+// typedef graphblas::Matrix<float> Matrix;
+
+// --
+// Helpers
 
 __global__ void __fill_constant(float* d_x, float val, int n) {
   int i = threadIdx.x + blockIdx.x * blockDim.x;
-  if(i < n) {
-    d_x[i] = val;
-  }
+  if(i < n) d_x[i] = val;
 }
 
+
+int easy_mxm(
+    const int A_num_rows,
+    const int A_num_cols,
+    const int A_nnz,
+    int* dA_csrOffsets,
+    int* dA_columns,
+    float* dA_values,
+
+    const int B_num_rows,
+    const int B_num_cols,
+    const int B_nnz,    
+    int* dB_csrOffsets,
+    int* dB_columns,
+    float* dB_values,
+
+
+    int& C_num_rows,
+    int& C_num_cols,
+    int& C_nnz,    
+    
+    int* dC_csrOffsets,
+    int* dC_columns,
+    float* dC_values
+) {
+  
+    float               alpha       = 1.0f;
+    float               beta        = 0.0f;
+    cusparseOperation_t opA         = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    cusparseOperation_t opB         = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    cudaDataType        computeType = CUDA_R_32F;
+    
+    //--------------------------------------------------------------------------
+    // CUSPARSE APIs
+    
+    cusparseHandle_t     handle = NULL;
+    cusparseSpMatDescr_t matA, matB, matC;
+    
+    void* dBuffer1 = NULL;
+    void* dBuffer2 = NULL;
+    
+    size_t bufferSize1 = 0;
+    size_t bufferSize2 = 0;
+    
+    cusparseCreate(&handle);
+    
+    // Create sparse matrices
+    cusparseCreateCsr(&matA, A_num_rows, A_num_cols, A_nnz,
+      dA_csrOffsets,
+      dA_columns,
+      dA_values,
+      CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+      CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+    
+    cusparseCreateCsr(&matB, B_num_rows, B_num_cols, B_nnz,
+      dB_csrOffsets, dB_columns, dB_values,
+      CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+      CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+    
+    cusparseCreateCsr(&matC, A_num_rows, B_num_cols, 0,
+      NULL, NULL, NULL,
+      CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+      CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+    
+    cusparseSpGEMMDescr_t spgemmDesc;
+    cusparseSpGEMM_createDescr(&spgemmDesc);
+
+    cusparseSpGEMM_workEstimation(
+      handle, opA, opB,
+      &alpha, matA, matB, &beta, matC,
+      computeType, CUSPARSE_SPGEMM_DEFAULT,
+      spgemmDesc, &bufferSize1, NULL
+    );
+    cudaMalloc((void**) &dBuffer1, bufferSize1);
+    
+    cusparseSpGEMM_workEstimation(
+      handle, opA, opB,
+      &alpha, matA, matB, &beta, matC,
+      computeType, CUSPARSE_SPGEMM_DEFAULT,
+      spgemmDesc, &bufferSize1, dBuffer1
+    );
+    cusparseSpGEMM_compute(
+      handle, opA, opB,
+      &alpha, matA, matB, &beta, matC,
+      computeType, CUSPARSE_SPGEMM_DEFAULT,
+      spgemmDesc, &bufferSize2, NULL
+    );
+    cudaMalloc((void**) &dBuffer2, bufferSize2);
+
+    // compute the intermediate product of A * B
+    cusparseSpGEMM_compute(
+      handle, opA, opB,
+      &alpha, matA, matB, &beta, matC,
+      computeType, CUSPARSE_SPGEMM_DEFAULT,
+      spgemmDesc, &bufferSize2, dBuffer2
+    );
+      
+    // get matrix C non-zero entries C_nnz1
+    int64_t C_num_rows1, C_num_cols1, C_nnz1;
+    cusparseSpMatGetSize(matC, &C_num_rows1, &C_num_cols1, &C_nnz1);
+    
+    std::cout << "C_num_rows1 : " << C_num_rows1 << std::endl;
+    std::cout << "C_num_cols1 : " << C_num_cols1 << std::endl;
+    std::cout << "C_nnz1      : " << C_nnz1      << std::endl;
+    
+    // allocate matrix C
+    cudaMalloc((void**) &dC_csrOffsets, (A_num_rows + 1) * sizeof(int  ));
+    cudaMalloc((void**) &dC_columns,    C_nnz1           * sizeof(int  ));
+    cudaMalloc((void**) &dC_values,     C_nnz1           * sizeof(float));
+    cusparseCsrSetPointers(matC, dC_csrOffsets, dC_columns, dC_values);
+
+    // cusparseSpGEMM_copy(handle, opA, opB, &alpha, matA, matB, &beta, matC, computeType, CUSPARSE_SPGEMM_DEFAULT, spgemmDesc);
+
+    // cusparseSpGEMM_destroyDescr(spgemmDesc);
+    // cusparseDestroySpMat(matA);
+    // cusparseDestroySpMat(matB);
+    // cusparseDestroySpMat(matC);
+    // cusparseDestroy(handle);
+    
+    // C_num_rows = C_num_rows1;
+    // C_num_cols = C_num_cols1;
+    // C_nnz    = C_nnz1;
+}
+
+
+void read_binary(std::string filename) {
+  FILE* file = fopen(filename.c_str(), "rb");
+  
+  auto err = fread(&nrows, sizeof(int), 1, file);
+  err = fread(&ncols, sizeof(int), 1, file);
+  err = fread(&nnz,  sizeof(int), 1, file);
+
+  std::cerr << "nrows: " << nrows << std::endl;
+  std::cerr << "ncols: " << ncols << std::endl;
+  std::cerr << "nnz : " << nnz << std::endl;
+
+  h_indptr  = (int*  )malloc((nrows + 1) * sizeof(int));
+  h_indices = (int*  )malloc(nnz        * sizeof(int));
+  h_data    = (float*)malloc(nnz        * sizeof(float));
+
+  err = fread(h_indptr,  sizeof(int),   nrows + 1, file);
+  err = fread(h_indices, sizeof(int),   nnz,      file);
+  err = fread(h_data,    sizeof(float), nnz,      file);
+
+  cudaMallocManaged(&d_indptr,  (nrows + 1) * sizeof(int));
+  cudaMallocManaged(&d_indices, nnz        * sizeof(int));
+  cudaMallocManaged(&d_data,    nnz        * sizeof(float));
+
+  cudaMemcpy(d_indptr,  h_indptr,  (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_indices, h_indices, nnz        * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_data,    h_data,    nnz        * sizeof(int), cudaMemcpyHostToDevice);
+}
+
+
 int main(int argc, char** argv) {
-
-  // --
-  // CLI
-
-  po::variables_map vm;
-
-  parseArgsProj(argc, argv, vm);
-  bool debug         = vm["proj-debug"].as<bool>();
-  bool unweighted    = vm["unweighted"].as<bool>();
-  bool print_results = vm["print-results"].as<bool>();
-  bool onto_cols     = vm["onto-cols"].as<bool>();
-
-  graphblas::Descriptor desc;
-  desc.loadArgs(vm);
-
-  // ---
-  // IO
-
-  std::vector<int> rowidx, colidx;
-  std::vector<float> val;
-  int num_rows, num_cols;
-  int num_edges;
-
-  std::string X_path = vm["X"].as<std::string>();
-  if(debug) fprintf(stderr, "proj.cu: loading %s\n", X_path.c_str());
-  readMtx(X_path.c_str(), rowidx, colidx, val, num_rows, num_cols, num_edges, 1, false);
-  Matrix X(num_rows, num_cols);
-  X.build(&rowidx, &colidx, &val, num_edges, GrB_NULL);
-  if(debug) fprintf(stderr, "\tdone\n");
-
+  read_binary(argv[1]);
+  
+  bool unweighted = true;
+  bool onto_cols  = false;
+  
   // --
   // Transpose
-  GpuTimer timer;
-  timer.Start();
-
-  if(debug) fprintf(stderr, "proj.cu: computing transpose\n");
 
   cusparseHandle_t handle = 0;
   cusparseStatus_t status = cusparseCreate(&handle);
 
-  int* tx_colidx;
-  int* tx_rowptr;
-  float* tx_val;
-  cudaMalloc((void**)&tx_colidx,      num_edges * sizeof(int));
-  cudaMalloc((void**)&tx_rowptr, (num_cols + 1) * sizeof(int));
-  cudaMalloc((void**)&tx_val,         num_edges * sizeof(float));
+  cudaMallocManaged((void**)&d_indptr_t,  (ncols + 1) * sizeof(int));
+  cudaMallocManaged((void**)&d_indices_t, nnz        * sizeof(int));
+  cudaMallocManaged((void**)&d_data_t,    nnz        * sizeof(float));
 
-  cusparseScsr2csc(
+  size_t buffer_size;
+  cusparseCsr2cscEx2_bufferSize(
     handle,
-    num_rows, num_cols, num_edges,
-    X.matrix_.sparse_.d_csrVal_, X.matrix_.sparse_.d_csrRowPtr_, X.matrix_.sparse_.d_csrColInd_,
-    tx_val, tx_colidx, tx_rowptr,
+    nrows, ncols, nnz,
+    d_data, d_indptr, d_indices,
+    d_data_t, d_indptr_t, d_indices_t,
+    CUDA_R_32F,
     CUSPARSE_ACTION_NUMERIC,
-    CUSPARSE_INDEX_BASE_ZERO
+    CUSPARSE_INDEX_BASE_ZERO,
+    CUSPARSE_CSR2CSC_ALG1,
+    &buffer_size
   );
+  
+  char* buffer;
+  cudaMalloc((void**)&buffer, sizeof(char)*buffer_size);
 
-  Matrix tX(num_cols, num_rows);
-  tX.build(tx_rowptr, tx_colidx, tx_val, num_edges);
-
-  if(debug) fprintf(stderr, "\tdone\n");
+  cusparseCsr2cscEx2(
+    handle,
+    nrows, ncols, nnz,
+    d_data, d_indptr, d_indices,
+    d_data_t, d_indptr_t, d_indices_t,
+    CUDA_R_32F,
+    CUSPARSE_ACTION_NUMERIC,
+    CUSPARSE_INDEX_BASE_ZERO,
+    CUSPARSE_CSR2CSC_ALG1,
+    buffer
+  );
+  
+  cudaDeviceSynchronize();
 
   // --
   // Change matrix edge weights
 
-  int block = 1 + num_edges / THREAD;
+  int block = 1 + nnz / THREAD;
   if(unweighted) {
-    __fill_constant<<<block, THREAD>>>(X.matrix_.sparse_.d_csrVal_, 1.0f, num_edges);
-    __fill_constant<<<block, THREAD>>>(tX.matrix_.sparse_.d_csrVal_, 1.0f, num_edges);
+    __fill_constant<<<block, THREAD>>>(d_data,   1.0f, nnz);
+    __fill_constant<<<block, THREAD>>>(d_data_t, 1.0f, nnz);
   }
 
   // --
   // Projection
 
-  if(debug) fprintf(stderr, "proj.cu: computing projection\n");
-  int dim_out;
+  // int dim_out = onto_cols ? ncols : nrows;
 
-  if(onto_cols) {
-    dim_out = num_cols;
-  } else {
-    dim_out = num_rows;
-  }
-
-  Matrix P(dim_out, dim_out);
-
-  if(onto_cols) {
-    graphblas::mxm<float,float,float,float>(
-      &P,
-      GrB_NULL,
-      GrB_NULL,
-      graphblas::PlusMultipliesSemiring<float>(),
-      &tX,
-      &X,
-      &desc
-    );
-  } else {
-    graphblas::mxm<float,float,float,float>(
-      &P,
-      GrB_NULL,
-      GrB_NULL,
-      graphblas::PlusMultipliesSemiring<float>(),
-      &X,
-      &tX,
-      &desc
-    );
-  }
-
-  if(debug) fprintf(stderr, "\tdone\n");
-
+  int* p_indptr;
+  int* p_indices;
+  float* p_data;
+  
+  int p_nrows = -1;
+  int p_ncols = -1;
+  int p_nnz   = -1;
+  
+  easy_mxm(
+    nrows, ncols, nnz,
+    d_indptr, d_indices, d_data,
+    
+    ncols, nrows, nnz,
+    d_indptr_t, d_indices_t, d_data_t,
+    
+    p_nrows, p_ncols, p_nnz,
+    p_indptr, p_indices, p_data
+  );
+  
+  cudaDeviceSynchronize();
+  
   // --
-  // Read results
-
-  int proj_num_edges; P.nvals(&proj_num_edges);
-  std::cerr << "proj_num_edges          = " << proj_num_edges << std::endl;
-  std::cerr << "dim_out                 = " << dim_out << std::endl;
-  std::cerr << "proj_num_edges (noloop) = " << proj_num_edges - dim_out << std::endl;
-
-  timer.Stop();
-  std::cerr << "timer=" << timer.ElapsedMillis() << std::endl;
-
-  if(print_results) {
-    int* h_proj_rowptr = (int*)malloc((dim_out + 1) * sizeof(int));
-    int* h_proj_colidx = (int*)malloc(proj_num_edges * sizeof(int));
-    float* h_proj_val  = (float*)malloc(proj_num_edges * sizeof(float));
-
-    cudaMemcpy(h_proj_rowptr, P.matrix_.sparse_.d_csrRowPtr_, (dim_out + 1) * sizeof(int),   cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_proj_colidx, P.matrix_.sparse_.d_csrColInd_, proj_num_edges * sizeof(int),   cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_proj_val,    P.matrix_.sparse_.d_csrVal_,    proj_num_edges * sizeof(float), cudaMemcpyDeviceToHost);
-
-    for(int i = 0; i < dim_out; i++) {
-      int start = h_proj_rowptr[i];
-      int end   = h_proj_rowptr[i + 1];
-      for(int offset = start; offset < end; offset++) {
-        if(i != h_proj_colidx[offset]) { // Don't print self loops
-          printf("%d %d %f\n", i, h_proj_colidx[offset], h_proj_val[offset]);
-        }
-      }
-    }
-    free(h_proj_rowptr);
-    free(h_proj_colidx);
-    free(h_proj_val);
-  }
-
-  // --
-  // Free memory
-
-  X.clear();
-  tX.clear();
+  // Copy to host
+  
+  int   hC_csrOffsets_tmp[p_nrows + 1];
+  int   hC_columns_tmp[p_nnz];
+  float hC_values_tmp[p_nnz];
+  
+  cudaMemcpy(hC_csrOffsets_tmp, p_indptr,  (p_nrows + 1) * sizeof(int  ), cudaMemcpyDeviceToHost);
+  cudaMemcpy(hC_columns_tmp,    p_indices, p_nnz         * sizeof(int  ), cudaMemcpyDeviceToHost);
+  cudaMemcpy(hC_values_tmp,     p_data,    p_nnz         * sizeof(float), cudaMemcpyDeviceToHost);
+  
+  std::cout << "p_nnz: " << p_nnz << std::endl;
 }
