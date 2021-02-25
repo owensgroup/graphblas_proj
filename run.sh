@@ -10,6 +10,20 @@ export GRAPHBLAS_PATH=$(pwd)/GraphBLAS
 make clean
 make
 
-python data/make-random.py --num-rows 1000 --num-cols 1000 --density 0.01
-./proj --X data/X.mtx --unweighted 1 --proj-debug 1 --print-results 0
+python data/make-random.py --num-rows 5000 --num-cols 5000 --density 0.01
+python data/mtx2bin.py --inpath data/X.mtx
+python reference.py data/X.mtx
+
+./proj data/X.bin
+
+# --
+
+python data/mtx2bin.py --inpath data/ml_1000000.mtx
+python reference.py data/ml_1000000.mtx
+./proj data/ml_1000000.bin
+
+python data/mtx2bin.py --inpath data/ml_5000000.mtx
+python reference.py data/ml_5000000.mtx
+./proj data/ml_5000000.bin
+
 

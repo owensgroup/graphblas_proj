@@ -5,18 +5,9 @@ all: check-env proj
 
 proj: src/*
 	nvcc -g $(ARCH) $(OPTIONS) -w -std=c++11 -o proj \
-		src/proj.cu \
-		$(GRAPHBLAS_PATH)/ext/moderngpu/src/mgpucontext.cu \
-		$(GRAPHBLAS_PATH)/ext/moderngpu/src/mgpuutil.cpp \
-		-I$(GRAPHBLAS_PATH)/ext/moderngpu/include \
-		-I$(GRAPHBLAS_PATH)/ext/cub/cub \
-		-I$(GRAPHBLAS_PATH)/ \
-		-Isrc/ \
-		-I/usr/local/cuda/samples/common/inc/ \
-		-lboost_program_options \
-		-lcublas \
-		-lcusparse \
-		-lcurand
+		src/proj.cu         \
+		-lcublas -lcusparse \
+		-Isrc/ 
 
 clean:
 	rm -f proj
