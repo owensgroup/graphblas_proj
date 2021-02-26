@@ -99,9 +99,9 @@ int main(int argc, char** argv) {
   // --
   // Transpose (gpu0)
 
-  cudaMallocManaged((void**)&indptr_t,  (ncols + 1) * sizeof(int));
-  cudaMallocManaged((void**)&indices_t, nnz         * sizeof(int));
-  cudaMallocManaged((void**)&data_t,    nnz         * sizeof(float));
+  cudaMalloc((void**)&indptr_t,  (ncols + 1) * sizeof(int));
+  cudaMalloc((void**)&indices_t, nnz         * sizeof(int));
+  cudaMalloc((void**)&data_t,    nnz         * sizeof(float));
 
   size_t buffer_size;
   cusparseCsr2cscEx2_bufferSize(
@@ -153,8 +153,11 @@ int main(int argc, char** argv) {
   int* chunked_nrows  = (int*)malloc(n_gpus * sizeof(int));
   int* chunked_nnzs   = (int*)malloc(n_gpus * sizeof(int));
   
+  GpuTimer t0;
+  t0.start();
+
   nvtxRangePushA("copy");
-  // #pragma omp parallel for num_threads(n_gpus)
+  #pragma omp parallel for num_threads(n_gpus)
   for(int i = 0; i < n_gpus; i++) {
     cudaSetDevice(i);
     
@@ -167,13 +170,9 @@ int main(int argc, char** argv) {
     cudaMalloc(&l_indices,   nnz           * sizeof(int  ));
     cudaMalloc(&l_data,      nnz           * sizeof(float));
 
-    cudaMemcpy(l_indptr,    indptr,    (nrows + 1)   * sizeof(int  ), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(l_indices,   indices,   nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(l_data,      data,      nnz           * sizeof(float), cudaMemcpyDeviceToDevice);
-
-    all_indptr[i]  = l_indptr;
-    all_indices[i] = l_indices;
-    all_data[i]    = l_data;
+    cudaMemcpyAsync(l_indptr,    indptr,    (nrows + 1)   * sizeof(int  ), cudaMemcpyDeviceToDevice, streams[i]);
+    cudaMemcpyAsync(l_indices,   indices,   nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice, streams[i]);
+    cudaMemcpyAsync(l_data,      data,      nnz           * sizeof(float), cudaMemcpyDeviceToDevice, streams[i]);
 
     // Prefetch LHS
     int* l_indptr_t; 
@@ -184,9 +183,9 @@ int main(int argc, char** argv) {
     cudaMalloc(&l_indices_t, nnz           * sizeof(int  ));
     cudaMalloc(&l_data_t,    nnz           * sizeof(float));
     
-    cudaMemcpy(l_indptr_t,  indptr_t,  (nrows_t + 1) * sizeof(int  ), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(l_indices_t, indices_t, nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(l_data_t,    data_t,    nnz           * sizeof(float), cudaMemcpyDeviceToDevice);
+    cudaMemcpyAsync(l_indptr_t,  indptr_t,  (nrows_t + 1) * sizeof(int  ), cudaMemcpyDeviceToDevice, streams[i]);
+    cudaMemcpyAsync(l_indices_t, indices_t, nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice, streams[i]);
+    cudaMemcpyAsync(l_data_t,    data_t,    nnz           * sizeof(float), cudaMemcpyDeviceToDevice, streams[i]);
         
     // Make chunks
     int* c_indptr_t;
@@ -199,8 +198,9 @@ int main(int argc, char** argv) {
     
     int chunk_start_offset;
     int chunk_end_offset;
-    cudaMemcpy(&chunk_start_offset, l_indptr_t + chunk_start, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&chunk_end_offset,   l_indptr_t + chunk_end,   sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(&chunk_start_offset, l_indptr_t + chunk_start, sizeof(int), cudaMemcpyDeviceToHost, streams[i]);
+    cudaMemcpyAsync(&chunk_end_offset,   l_indptr_t + chunk_end,   sizeof(int), cudaMemcpyDeviceToHost, streams[i]);
+    cudaStreamSynchronize(streams[i]);
 
     int chunk_rows = chunk_end - chunk_start;
     int chunk_nnz  = chunk_end_offset - chunk_start_offset;
@@ -209,27 +209,36 @@ int main(int argc, char** argv) {
     cudaMalloc((void**)&c_indices_t, chunk_nnz        * sizeof(int));
     cudaMalloc((void**)&c_data_t,    chunk_nnz        * sizeof(float));
     
-    cudaMemcpy(c_indptr_t,  l_indptr_t  + chunk_start,        (chunk_rows + 1) * sizeof(int),   cudaMemcpyDeviceToDevice);
-    cudaMemcpy(c_indices_t, l_indices_t + chunk_start_offset, chunk_nnz        * sizeof(int),   cudaMemcpyDeviceToDevice);
-    cudaMemcpy(c_data_t,    l_data_t    + chunk_start_offset, chunk_nnz        * sizeof(float), cudaMemcpyDeviceToDevice);
+    cudaMemcpyAsync(c_indptr_t,  l_indptr_t  + chunk_start,        (chunk_rows + 1) * sizeof(int),   cudaMemcpyDeviceToDevice, streams[i]);
+    cudaMemcpyAsync(c_indices_t, l_indices_t + chunk_start_offset, chunk_nnz        * sizeof(int),   cudaMemcpyDeviceToDevice, streams[i]);
+    cudaMemcpyAsync(c_data_t,    l_data_t    + chunk_start_offset, chunk_nnz        * sizeof(float), cudaMemcpyDeviceToDevice, streams[i]);
 
     int blocks = 1 + chunk_rows / 1024;
     if(chunk_start_offset > 0)
-        __subtract<<<blocks, 1024, 0>>>(c_indptr_t, chunk_start_offset, chunk_rows + 1);
+        __subtract<<<blocks, 1024, 0, streams[i]>>>(c_indptr_t, chunk_start_offset, chunk_rows + 1);
 
+    all_indptr[i]        = l_indptr;
+    all_indices[i]       = l_indices;
+    all_data[i]          = l_data;
     chunked_indptr_t[i]  = c_indptr_t;
     chunked_indices_t[i] = c_indices_t;
     chunked_data_t[i]    = c_data_t; 
     chunked_nrows[i]     = chunk_rows;
     chunked_nnzs[i]      = chunk_nnz;
     
+    cudaStreamSynchronize(streams[i]);
   }
   nvtxRangePop();
+
   cudaSetDevice(0);
-  
+
+  t0.stop();
+  float elapsed0 = t0.elapsed();  
+  std::cout << "elapsed0 : " << elapsed0 << std::endl;
+
   // --
   // Run on all GPUs
-  
+
   GpuTimer t;
   t.start();
 
