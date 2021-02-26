@@ -23,6 +23,7 @@ int* indices_t;
 float* data_t;
 
 #define THREAD 1024
+// #define VERBOSE
 
 // --
 // Helpers
@@ -45,9 +46,11 @@ void read_binary(std::string filename) {
   err = fread(&ncols, sizeof(int), 1, file);
   err = fread(&nnz,  sizeof(int), 1, file);
 
+#ifdef VERBOSE
   std::cerr << "nrows : " << nrows << std::endl;
   std::cerr << "ncols : " << ncols << std::endl;
   std::cerr << "nnz   : " << nnz << std::endl;
+#endif
 
   h_indptr  = (int*  )malloc((nrows + 1) * sizeof(int));
   h_indices = (int*  )malloc(nnz         * sizeof(int));
@@ -96,6 +99,9 @@ int main(int argc, char** argv) {
     __fill_constant<<<block, THREAD>>>(data,   1.0f, nnz);
   }
   
+  GpuTimer t;
+  t.start();
+
   // --
   // Transpose (gpu0)
 
@@ -160,9 +166,6 @@ int main(int argc, char** argv) {
   int* chunked_nrows  = (int*)malloc(n_gpus * sizeof(int));
   int* chunked_nnzs   = (int*)malloc(n_gpus * sizeof(int));
   
-  GpuTimer t0;
-  t0.start();
-
   nvtxRangePushA("copy");
   #pragma omp parallel for num_threads(n_gpus)
   for(int i = 0; i < n_gpus; i++) {
@@ -239,15 +242,8 @@ int main(int argc, char** argv) {
 
   cudaSetDevice(0);
 
-  t0.stop();
-  float elapsed0 = t0.elapsed();  
-  std::cout << "elapsed0 : " << elapsed0 << std::endl;
-
   // --
   // Run on all GPUs
-
-  GpuTimer t;
-  t.start();
 
   nvtxRangePushA("work");
   
