@@ -99,9 +99,16 @@ int main(int argc, char** argv) {
   // --
   // Transpose (gpu0)
 
-  cudaMalloc((void**)&indptr_t,  (ncols + 1) * sizeof(int));
-  cudaMalloc((void**)&indices_t, nnz         * sizeof(int));
-  cudaMalloc((void**)&data_t,    nnz         * sizeof(float));
+  // >>
+  // cudaMalloc((void**)&indptr_t,  (ncols + 1) * sizeof(int));
+  // cudaMalloc((void**)&indices_t, nnz         * sizeof(int));
+  // cudaMalloc((void**)&data_t,    nnz         * sizeof(float));
+  // --
+  // This is uglier, but it speeds things up a little ... 
+  cudaMallocManaged((void**)&indptr_t,  (ncols + 1) * sizeof(int));
+  cudaMallocManaged((void**)&indices_t, nnz         * sizeof(int));
+  cudaMallocManaged((void**)&data_t,    nnz         * sizeof(float));
+  // <<
 
   size_t buffer_size;
   cusparseCsr2cscEx2_bufferSize(
@@ -186,7 +193,7 @@ int main(int argc, char** argv) {
     cudaMemcpyAsync(l_indptr_t,  indptr_t,  (nrows_t + 1) * sizeof(int  ), cudaMemcpyDeviceToDevice, streams[i]);
     cudaMemcpyAsync(l_indices_t, indices_t, nnz           * sizeof(int  ), cudaMemcpyDeviceToDevice, streams[i]);
     cudaMemcpyAsync(l_data_t,    data_t,    nnz           * sizeof(float), cudaMemcpyDeviceToDevice, streams[i]);
-        
+    
     // Make chunks
     int* c_indptr_t;
     int* c_indices_t;
