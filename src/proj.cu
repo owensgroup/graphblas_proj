@@ -1,3 +1,11 @@
+#include <cuda.h>               /* for Gpuinfo */
+#include <cuda_runtime_api.h>   /* for Gpuinfo */
+#include <iomanip>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include "json.hpp"
+using json = nlohmann::json;
 
 #include <iostream>
 #include <cusparse.h>
@@ -69,9 +77,45 @@ void read_binary(std::string filename) {
   cudaMemcpy(data,    h_data,    nnz         * sizeof(float), cudaMemcpyHostToDevice);
 }
 
+json gpu_info_json() {
+    json j;
+    cudaDeviceProp devProps;
+
+    int deviceCount;
+    cudaGetDeviceCount(&deviceCount);
+    if (deviceCount == 0)   /* no valid devices */
+    {
+        return j;        /* empty */
+    }
+    int dev = 0;
+    cudaGetDevice(&dev);
+    cudaGetDeviceProperties(&devProps, dev);
+    j["gpuinfo"]["name"] = devProps.name;
+    j["gpuinfo"]["total_global_mem"] = int64_t(devProps.totalGlobalMem);
+    j["gpuinfo"]["major"] = devProps.major;
+    j["gpuinfo"]["minor"] = devProps.minor;
+    j["gpuinfo"]["clock_rate"] = devProps.clockRate;
+    j["gpuinfo"]["multi_processor_count"] = devProps.multiProcessorCount;
+
+    int runtimeVersion, driverVersion;
+    cudaRuntimeGetVersion(&runtimeVersion);
+    cudaDriverGetVersion(&driverVersion);
+    j["gpuinfo"]["driver_api"] = CUDA_VERSION;
+    j["gpuinfo"]["driver_version"] = driverVersion;
+    j["gpuinfo"]["runtime_version"] = runtimeVersion;
+    j["gpuinfo"]["compute_version"] = devProps.major * 10 + devProps.minor;
+
+    return j;
+}
 
 int main(int argc, char** argv) {
   
+  // proj path_to_dataset.bin path_to_output.json
+  if(argc < 1 || argc != 3) {
+      std::cout << "Usage: proj <input_dataset.bin> <path_to_output.json>\n";
+      std::exit(EXIT_FAILURE);
+  }
+
   // --
   // MGPU setup
   
@@ -80,12 +124,12 @@ int main(int argc, char** argv) {
   cudaStream_t* streams     = new cudaStream_t[n_gpus];
   cusparseHandle_t* handles = new cusparseHandle_t[n_gpus];
 
-	for (int i = 0; i < n_gpus; i++) {
-		cudaSetDevice(i);
-		cudaStreamCreate(&(streams[i]));
+  for (int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    cudaStreamCreate(&(streams[i]));
     cusparseCreate(&(handles[i])); 
     cusparseSetStream(handles[i], streams[i]);
-	}
+  }
   cudaSetDevice(0);
   
   // --
@@ -288,4 +332,36 @@ int main(int argc, char** argv) {
   
   std::cout << "elapsed : " << elapsed << std::endl;
   std::cout << "acc     : " << acc     << std::endl;
+
+
+  auto j = gpu_info_json();
+
+  // save the command line
+  std::ostringstream command_line;
+  for(int i = 0; i < argc; i++) {
+      command_line << argv[i] << " ";
+  }
+  j["command-line"] = command_line.str();
+
+  j["primitive"] = "proj";
+  j["graph-file"] = std::string(argv[1]);
+  j["graph-edges"] = nnz;
+  j["graph-nodes"] = nrows + ncols;
+  j["avg-process-time"] = elapsed;
+
+  time_t now = time(NULL);
+  j["time"] = ctime(&now);
+
+  j["tag"] = {std::string("num-gpus:") + std::to_string(n_gpus)};
+
+  // get the dataset from the json
+  auto dataset = std::string(argv[2]);
+  std::size_t p1 = dataset.find("proj__") + 6; // skip the expected "proj__"
+  std::size_t p2 = dataset.find("__GPU");
+  j["dataset"] = dataset.substr(p1, p2-p1);
+
+  std::ofstream output_json(argv[2]);
+  output_json << std::setw(4) << j << std::endl;
+
+  return 0;
 }
