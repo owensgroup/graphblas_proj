@@ -1,8 +1,9 @@
 #!/bin/bash
 
-PARTITION_NAME="dgx2"
-PARTITION_NAME="batch"
 NUM_GPUS=${1:-16}
+
+PARTITION_NAME=${2:-"dgx2"}
+#PARTITION_NAME="batch"
 
 APP_SCRIPT="./hive-proj-test.sh"
 
